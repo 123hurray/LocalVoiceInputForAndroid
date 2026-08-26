@@ -74,13 +74,6 @@ class VoiceInputService : InputMethodService() {
             }
         }
 
-        val testButton = Button(this).apply {
-            text = getString(R.string.test_input)
-            setOnClickListener {
-                currentInputConnection?.commitText(getString(R.string.test_text), 1)
-            }
-        }
-
         val returnButton = Button(this).apply {
             text = getString(R.string.return_to_fcitx)
             setOnClickListener { returnToPreviousInputMethod(showPickerOnFailure = true) }
@@ -95,7 +88,6 @@ class VoiceInputService : InputMethodService() {
             addView(statusView, matchWidthWrapHeight())
             addView(recordButton, matchWidthWrapHeight())
             addView(returnButton, matchWidthWrapHeight())
-            addView(testButton, matchWidthWrapHeight())
             ensureModelLoaded()
         }
     }

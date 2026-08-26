@@ -2,8 +2,6 @@
     <string name="app_name">LocalVoiceIME</string>
     <string name="ime_name">本地语音输入</string>
     <string name="voice_subtype_name">本地语音（中英文）</string>
-    <string name="test_input">测试输入</string>
-    <string name="test_text">这是本地语音输入测试</string>
     <string name="start_recording">开始录音</string>
     <string name="stop_recording">停止录音</string>
     <string name="recording_idle">尚未录音</string>
