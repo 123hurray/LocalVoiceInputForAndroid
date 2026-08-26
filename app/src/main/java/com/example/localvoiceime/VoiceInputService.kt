@@ -11,14 +11,16 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlin.math.max
 
@@ -29,7 +31,7 @@ class VoiceInputService : InputMethodService() {
     private lateinit var recordButton: Button
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val sampleCount = AtomicLong(0)
+    private val pcmBuffer = PcmSampleBuffer(SAMPLE_RATE * MAX_RECORDING_SECONDS)
 
     @Volatile
     private var isRecording = false
@@ -42,6 +44,8 @@ class VoiceInputService : InputMethodService() {
     private var isModelLoading = false
     @Volatile
     private var isDestroyed = false
+    @Volatile
+    private var isRecognizing = false
 
     override fun onCreateInputView(): View {
         val padding = (16 * resources.displayMetrics.density).toInt()
@@ -62,7 +66,11 @@ class VoiceInputService : InputMethodService() {
         recordButton = Button(this).apply {
             text = getString(R.string.start_recording)
             setOnClickListener {
-                if (isRecording) stopRecording() else startRecordingOrRequestPermission()
+                if (isRecording) {
+                    stopRecording(shouldRecognize = true)
+                } else if (!isRecognizing) {
+                    startRecordingOrRequestPermission()
+                }
             }
         }
 
@@ -73,6 +81,11 @@ class VoiceInputService : InputMethodService() {
             }
         }
 
+        val returnButton = Button(this).apply {
+            text = getString(R.string.return_to_fcitx)
+            setOnClickListener { returnToPreviousInputMethod(showPickerOnFailure = true) }
+        }
+
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -81,6 +94,7 @@ class VoiceInputService : InputMethodService() {
             addView(modelStatusView, matchWidthWrapHeight())
             addView(statusView, matchWidthWrapHeight())
             addView(recordButton, matchWidthWrapHeight())
+            addView(returnButton, matchWidthWrapHeight())
             addView(testButton, matchWidthWrapHeight())
             ensureModelLoaded()
         }
@@ -94,15 +108,17 @@ class VoiceInputService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        stopRecording()
+        stopRecording(shouldRecognize = false)
         super.onFinishInputView(finishingInput)
     }
 
     override fun onDestroy() {
         isDestroyed = true
-        stopRecording()
-        senseVoiceAsr?.close()
-        senseVoiceAsr = null
+        stopRecording(shouldRecognize = false)
+        if (!isRecognizing) {
+            senseVoiceAsr?.close()
+            senseVoiceAsr = null
+        }
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
@@ -152,7 +168,12 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun startRecording() {
-        if (isRecording) return
+        if (isRecording || isRecognizing) return
+        if (senseVoiceAsr == null) {
+            showRecognitionError(getString(R.string.model_not_ready))
+            ensureModelLoaded()
+            return
+        }
 
         val minimumBufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
@@ -193,7 +214,7 @@ class VoiceInputService : InputMethodService() {
         }
 
         audioRecord = recorder
-        sampleCount.set(0)
+        pcmBuffer.clear()
         startedAtMs = SystemClock.elapsedRealtime()
         isRecording = true
         recordButton.text = getString(R.string.stop_recording)
@@ -204,7 +225,21 @@ class VoiceInputService : InputMethodService() {
             while (isRecording) {
                 val count = recorder.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
                 when {
-                    count > 0 -> sampleCount.addAndGet(count.toLong())
+                    count > 0 -> {
+                        val appended = pcmBuffer.append(samples, count)
+                        if (appended < count || pcmBuffer.size() >= MAX_BUFFERED_SAMPLES) {
+                            isRecording = false
+                            mainHandler.post {
+                                if (::statusView.isInitialized) {
+                                    statusView.text = getString(
+                                        R.string.recording_limit_reached,
+                                        MAX_RECORDING_SECONDS,
+                                    )
+                                }
+                                stopRecording(shouldRecognize = true)
+                            }
+                        }
+                    }
                     count < 0 && isRecording -> {
                         mainHandler.post { showError("AudioRecord.read 返回 $count") }
                         break
@@ -215,7 +250,7 @@ class VoiceInputService : InputMethodService() {
         mainHandler.postDelayed(statusUpdater, STATUS_UPDATE_INTERVAL_MS)
     }
 
-    private fun stopRecording() {
+    private fun stopRecording(shouldRecognize: Boolean) {
         if (!isRecording && audioRecord == null) return
 
         isRecording = false
@@ -240,8 +275,99 @@ class VoiceInputService : InputMethodService() {
             statusView.text = getString(
                 R.string.recording_stopped,
                 elapsedSeconds(),
-                sampleCount.get(),
+                pcmBuffer.size(),
             )
+        }
+
+        if (shouldRecognize) {
+            recognizeBufferedAudio()
+        } else {
+            pcmBuffer.clear()
+        }
+    }
+
+    private fun recognizeBufferedAudio() {
+        val recognizer = senseVoiceAsr
+        val samples = pcmBuffer.toNormalizedFloatArray()
+        pcmBuffer.clear()
+        if (recognizer == null) {
+            showRecognitionError(getString(R.string.model_not_ready))
+            return
+        }
+        if (samples.isEmpty()) {
+            statusView.text = getString(R.string.recognition_empty)
+            return
+        }
+
+        val targetConnection = currentInputConnection
+        isRecognizing = true
+        recordButton.isEnabled = false
+        statusView.text = getString(
+            R.string.recognizing,
+            samples.size.toFloat() / SAMPLE_RATE,
+        )
+
+        thread(name = "LocalVoiceIME-SenseVoice-Decode") {
+            try {
+                val text = recognizer.recognize(samples)
+                if (!isDestroyed) {
+                    mainHandler.post { handleRecognitionResult(text, targetConnection) }
+                }
+            } catch (error: Throwable) {
+                if (!isDestroyed) {
+                    mainHandler.post {
+                        showRecognitionError(error.message ?: error.javaClass.simpleName)
+                    }
+                }
+            } finally {
+                isRecognizing = false
+                if (isDestroyed) {
+                    recognizer.close()
+                    senseVoiceAsr = null
+                } else {
+                    mainHandler.post {
+                        if (::recordButton.isInitialized) recordButton.isEnabled = true
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleRecognitionResult(text: String, targetConnection: InputConnection?) {
+        if (text.isBlank()) {
+            statusView.text = getString(R.string.recognition_empty)
+            return
+        }
+        if (targetConnection == null || currentInputConnection !== targetConnection) {
+            statusView.text = getString(R.string.input_target_changed, text)
+            return
+        }
+        if (targetConnection.commitText(text, 1)) {
+            statusView.text = getString(R.string.recognition_result, text)
+            mainHandler.postDelayed(
+                { returnToPreviousInputMethod(showPickerOnFailure = false) },
+                RETURN_TO_PREVIOUS_IME_DELAY_MS,
+            )
+        } else {
+            statusView.text = getString(R.string.recognition_error, "无法提交识别文字")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun returnToPreviousInputMethod(showPickerOnFailure: Boolean) {
+        val switched = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            switchToPreviousInputMethod()
+        } else {
+            val token = window.window?.attributes?.token
+            token != null && getSystemService(InputMethodManager::class.java)
+                .switchToLastInputMethod(token)
+        }
+
+        if (!switched && showPickerOnFailure) {
+            if (::statusView.isInitialized) {
+                statusView.text = getString(R.string.return_to_previous_failed)
+            }
+            getSystemService(InputMethodManager::class.java).showInputMethodPicker()
         }
     }
 
@@ -258,15 +384,21 @@ class VoiceInputService : InputMethodService() {
             statusView.text = getString(
                 R.string.recording_active,
                 elapsedSeconds(),
-                sampleCount.get(),
+                pcmBuffer.size(),
             )
         }
     }
 
     private fun showError(message: String) {
-        stopRecording()
+        stopRecording(shouldRecognize = false)
         if (::statusView.isInitialized) {
             statusView.text = getString(R.string.recording_error, message)
+        }
+    }
+
+    private fun showRecognitionError(message: String) {
+        if (::statusView.isInitialized) {
+            statusView.text = getString(R.string.recognition_error, message)
         }
     }
 
@@ -283,5 +415,8 @@ class VoiceInputService : InputMethodService() {
         private const val BYTES_PER_SAMPLE = 2
         private const val STATUS_UPDATE_INTERVAL_MS = 100L
         private const val RECORDING_THREAD_JOIN_MS = 500L
+        private const val MAX_RECORDING_SECONDS = 60
+        private const val MAX_BUFFERED_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
+        private const val RETURN_TO_PREVIOUS_IME_DELAY_MS = 200L
     }
 }

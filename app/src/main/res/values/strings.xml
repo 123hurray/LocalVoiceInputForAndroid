@@ -10,6 +10,15 @@
     <string name="recording_active">正在录音：%1$.1f 秒，%2$d 个采样</string>
     <string name="recording_stopped">录音已停止：%1$.1f 秒，%2$d 个采样</string>
     <string name="recording_error">录音错误：%1$s</string>
+    <string name="recognizing">正在本地识别 %1$.1f 秒音频…</string>
+    <string name="recognition_result">识别完成：%1$s</string>
+    <string name="recognition_empty">未识别到文字，请重试</string>
+    <string name="recognition_error">识别失败：%1$s</string>
+    <string name="model_not_ready">模型尚未就绪</string>
+    <string name="input_target_changed">识别完成，但输入目标已变化，未自动输入：%1$s</string>
+    <string name="recording_limit_reached">已达到最长 %1$d 秒，开始识别</string>
+    <string name="return_to_fcitx">返回小企鹅键盘</string>
+    <string name="return_to_previous_failed">无法直接返回上一个键盘，请从系统选择器切换</string>
     <string name="microphone_permission_title">需要麦克风权限</string>
     <string name="microphone_permission_description">LocalVoiceIME 只在设备本地读取麦克风音频，不保存或上传录音。</string>
     <string name="grant_permission">授予麦克风权限</string>
