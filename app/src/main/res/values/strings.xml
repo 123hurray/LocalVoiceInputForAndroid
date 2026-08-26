@@ -14,4 +14,7 @@
     <string name="microphone_permission_description">LocalVoiceIME 只在设备本地读取麦克风音频，不保存或上传录音。</string>
     <string name="grant_permission">授予麦克风权限</string>
     <string name="permission_denied">未获得麦克风权限</string>
+    <string name="model_loading">SenseVoice 模型加载中…</string>
+    <string name="model_ready">SenseVoice Small INT8 已就绪</string>
+    <string name="model_error">模型加载失败：%1$s</string>
 </resources>

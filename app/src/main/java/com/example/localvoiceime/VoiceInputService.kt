@@ -25,6 +25,7 @@ import kotlin.math.max
 class VoiceInputService : InputMethodService() {
 
     private lateinit var statusView: TextView
+    private lateinit var modelStatusView: TextView
     private lateinit var recordButton: Button
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -35,6 +36,12 @@ class VoiceInputService : InputMethodService() {
     private var startedAtMs = 0L
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
+    @Volatile
+    private var senseVoiceAsr: SenseVoiceAsr? = null
+    @Volatile
+    private var isModelLoading = false
+    @Volatile
+    private var isDestroyed = false
 
     override fun onCreateInputView(): View {
         val padding = (16 * resources.displayMetrics.density).toInt()
@@ -44,6 +51,12 @@ class VoiceInputService : InputMethodService() {
             gravity = Gravity.CENTER
             setTextColor(Color.DKGRAY)
             setTypeface(typeface, Typeface.BOLD)
+        }
+
+        modelStatusView = TextView(this).apply {
+            text = getString(R.string.model_loading)
+            gravity = Gravity.CENTER
+            setTextColor(Color.DKGRAY)
         }
 
         recordButton = Button(this).apply {
@@ -65,9 +78,11 @@ class VoiceInputService : InputMethodService() {
             gravity = Gravity.CENTER
             setPadding(padding, padding, padding, padding)
             setBackgroundColor(Color.WHITE)
+            addView(modelStatusView, matchWidthWrapHeight())
             addView(statusView, matchWidthWrapHeight())
             addView(recordButton, matchWidthWrapHeight())
             addView(testButton, matchWidthWrapHeight())
+            ensureModelLoaded()
         }
     }
 
@@ -84,9 +99,44 @@ class VoiceInputService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        isDestroyed = true
         stopRecording()
+        senseVoiceAsr?.close()
+        senseVoiceAsr = null
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
+    }
+
+    private fun ensureModelLoaded() {
+        if (senseVoiceAsr != null || isModelLoading) return
+        isModelLoading = true
+        modelStatusView.text = getString(R.string.model_loading)
+        thread(name = "LocalVoiceIME-SenseVoice-Init") {
+            try {
+                val recognizer = SenseVoiceAsr(assets)
+                if (isDestroyed) {
+                    recognizer.close()
+                } else {
+                    senseVoiceAsr = recognizer
+                    mainHandler.post {
+                        if (::modelStatusView.isInitialized) {
+                            modelStatusView.text = getString(R.string.model_ready)
+                        }
+                    }
+                }
+            } catch (error: Throwable) {
+                mainHandler.post {
+                    if (::modelStatusView.isInitialized) {
+                        modelStatusView.text = getString(
+                            R.string.model_error,
+                            error.message ?: error.javaClass.simpleName,
+                        )
+                    }
+                }
+            } finally {
+                isModelLoading = false
+            }
+        }
     }
 
     private fun startRecordingOrRequestPermission() {

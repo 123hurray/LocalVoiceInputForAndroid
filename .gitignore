@@ -2,8 +2,11 @@
 .gradle
 .gradle-local
 .android-local
+/app/src/main/assets/sense-voice/model.int8.onnx
+/app/src/main/assets/sense-voice/tokens.txt
 /local.properties
 /.idea/caches
+/.idea/
 /.idea/libraries
 /.idea/modules.xml
 /.idea/workspace.xml
