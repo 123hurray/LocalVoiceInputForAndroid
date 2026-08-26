@@ -5,15 +5,19 @@ import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 
-class SileroVadDetector(assetManager: AssetManager) : AutoCloseable {
+class SileroVadDetector(
+    assetManager: AssetManager,
+    silenceDurationSeconds: Float,
+    threshold: Float,
+) : AutoCloseable {
 
     private val vad = Vad(
         assetManager = assetManager,
         config = VadModelConfig(
             sileroVadModelConfig = SileroVadModelConfig(
                 model = MODEL_PATH,
-                threshold = 0.5f,
-                minSilenceDuration = 1.0f,
+                threshold = threshold,
+                minSilenceDuration = silenceDurationSeconds,
                 minSpeechDuration = 0.25f,
                 windowSize = 512,
                 maxSpeechDuration = 60f,

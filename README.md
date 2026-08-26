@@ -99,6 +99,18 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 
 首次使用会请求麦克风权限。
 
+## 设置
+
+安装后可从桌面打开 LocalVoiceIME 设置：
+
+- 自动开始录音
+- 最长录音时间
+- 启用或关闭 Silero VAD
+- VAD 静音等待时间和灵敏度
+- 识别成功后自动返回上一个输入法
+
+关闭 VAD 后不会读取或初始化 VAD 模型，录音需手动停止。
+
 ## 隐私与限制
 
 - 仅申请 `RECORD_AUDIO`，不申请 `INTERNET`。

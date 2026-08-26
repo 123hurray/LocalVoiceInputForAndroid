@@ -33,6 +33,8 @@ class VoiceInputService : InputMethodService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pcmBuffer = PcmSampleBuffer(SAMPLE_RATE * MAX_RECORDING_SECONDS)
+    private val settingsStore by lazy { VoiceSettingsStore(this) }
+    private var activeSettings = VoiceSettings()
 
     @Volatile
     private var isRecording = false
@@ -45,6 +47,11 @@ class VoiceInputService : InputMethodService() {
     private var vadDetector: SileroVadDetector? = null
     @Volatile
     private var isModelLoading = false
+    @Volatile
+    private var isVadLoading = false
+    @Volatile
+    private var vadLoadGeneration = 0
+    private var loadedVadSettings: Pair<Float, Float>? = null
     @Volatile
     private var isDestroyed = false
     @Volatile
@@ -106,6 +113,7 @@ class VoiceInputService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        activeSettings = settingsStore.load()
         if (!isInputViewActive) {
             autoStartConsumed = false
         }
@@ -113,7 +121,8 @@ class VoiceInputService : InputMethodService() {
         if (::recordButton.isInitialized && !isRecording) {
             recordButton.text = getString(R.string.start_recording)
         }
-        maybeAutoStartRecording()
+        ensureModelLoaded()
+        if (senseVoiceAsr != null) configureVadForActiveSettings()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -124,6 +133,7 @@ class VoiceInputService : InputMethodService() {
 
     override fun onDestroy() {
         isDestroyed = true
+        vadLoadGeneration += 1
         stopRecording(shouldRecognize = false)
         if (!isRecognizing) {
             senseVoiceAsr?.close()
@@ -136,30 +146,17 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun ensureModelLoaded() {
-        if ((senseVoiceAsr != null && vadDetector != null) || isModelLoading) return
+        if (senseVoiceAsr != null || isModelLoading) return
         isModelLoading = true
         modelStatusView.text = getString(R.string.model_loading)
         thread(name = "LocalVoiceIME-SenseVoice-Init") {
             try {
                 val recognizer = SenseVoiceAsr(assets)
-                try {
-                    val detector = SileroVadDetector(assets)
-                    if (isDestroyed) {
-                        detector.close()
-                        recognizer.close()
-                    } else {
-                        senseVoiceAsr = recognizer
-                        vadDetector = detector
-                        mainHandler.post {
-                            if (::modelStatusView.isInitialized) {
-                                modelStatusView.text = getString(R.string.model_ready)
-                            }
-                            maybeAutoStartRecording()
-                        }
-                    }
-                } catch (error: Throwable) {
+                if (isDestroyed) {
                     recognizer.close()
-                    throw error
+                } else {
+                    senseVoiceAsr = recognizer
+                    mainHandler.post { configureVadForActiveSettings() }
                 }
             } catch (error: Throwable) {
                 mainHandler.post {
@@ -172,6 +169,68 @@ class VoiceInputService : InputMethodService() {
                 }
             } finally {
                 isModelLoading = false
+            }
+        }
+    }
+
+    private fun configureVadForActiveSettings() {
+        if (isDestroyed || senseVoiceAsr == null) return
+        val settings = activeSettings
+        if (!settings.vadEnabled) {
+            vadLoadGeneration += 1
+            isVadLoading = false
+            vadDetector?.close()
+            vadDetector = null
+            loadedVadSettings = null
+            modelStatusView.text = getString(R.string.model_ready_without_vad)
+            maybeAutoStartRecording()
+            return
+        }
+
+        val requested = settings.silenceDurationSeconds to settings.vadThreshold
+        if (vadDetector != null && loadedVadSettings == requested) {
+            modelStatusView.text = getString(R.string.model_ready)
+            maybeAutoStartRecording()
+            return
+        }
+        if (isVadLoading) return
+
+        vadDetector?.close()
+        vadDetector = null
+        loadedVadSettings = null
+        isVadLoading = true
+        modelStatusView.text = getString(R.string.model_loading)
+        val generation = ++vadLoadGeneration
+        thread(name = "LocalVoiceIME-SileroVAD-Init") {
+            try {
+                val detector = SileroVadDetector(
+                    assetManager = assets,
+                    silenceDurationSeconds = requested.first,
+                    threshold = requested.second,
+                )
+                if (isDestroyed || generation != vadLoadGeneration) {
+                    detector.close()
+                } else {
+                    vadDetector = detector
+                    loadedVadSettings = requested
+                    mainHandler.post {
+                        if (::modelStatusView.isInitialized) {
+                            modelStatusView.text = getString(R.string.model_ready)
+                        }
+                        maybeAutoStartRecording()
+                    }
+                }
+            } catch (error: Throwable) {
+                if (!isDestroyed && generation == vadLoadGeneration) {
+                    mainHandler.post {
+                        modelStatusView.text = getString(
+                            R.string.model_error,
+                            "VAD：${error.message ?: error.javaClass.simpleName}",
+                        )
+                    }
+                }
+            } finally {
+                if (generation == vadLoadGeneration) isVadLoading = false
             }
         }
     }
@@ -190,7 +249,8 @@ class VoiceInputService : InputMethodService() {
 
     private fun maybeAutoStartRecording() {
         if (!isInputViewActive || autoStartConsumed || isRecording || isRecognizing) return
-        if (senseVoiceAsr == null || vadDetector == null) return
+        if (!activeSettings.autoStartRecording || senseVoiceAsr == null) return
+        if (activeSettings.vadEnabled && vadDetector == null) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             if (::statusView.isInitialized) {
                 statusView.text = getString(R.string.tap_to_grant_microphone)
@@ -203,7 +263,7 @@ class VoiceInputService : InputMethodService() {
 
     private fun startRecording() {
         if (isRecording || isRecognizing) return
-        if (senseVoiceAsr == null || vadDetector == null) {
+        if (senseVoiceAsr == null || (activeSettings.vadEnabled && vadDetector == null)) {
             showRecognitionError(getString(R.string.model_not_ready))
             ensureModelLoaded()
             return
@@ -264,7 +324,7 @@ class VoiceInputService : InputMethodService() {
                     count > 0 -> {
                         val appended = pcmBuffer.append(samples, count)
                         val speechCompleted = try {
-                            vadDetector?.accept(samples, count) == true
+                            activeSettings.vadEnabled && vadDetector?.accept(samples, count) == true
                         } catch (error: Throwable) {
                             mainHandler.post {
                                 showError("VAD：${error.message ?: error.javaClass.simpleName}")
@@ -280,13 +340,16 @@ class VoiceInputService : InputMethodService() {
                                 stopRecording(shouldRecognize = true)
                             }
                             break
-                        } else if (appended < count || pcmBuffer.size() >= MAX_BUFFERED_SAMPLES) {
+                        } else if (
+                            appended < count ||
+                            pcmBuffer.size() >= SAMPLE_RATE * activeSettings.maxRecordingSeconds
+                        ) {
                             isRecording = false
                             mainHandler.post {
                                 if (::statusView.isInitialized) {
                                     statusView.text = getString(
                                         R.string.recording_limit_reached,
-                                        MAX_RECORDING_SECONDS,
+                                        activeSettings.maxRecordingSeconds,
                                     )
                                 }
                                 stopRecording(shouldRecognize = true)
@@ -410,10 +473,12 @@ class VoiceInputService : InputMethodService() {
         }
         if (targetConnection.commitText(text, 1)) {
             statusView.text = getString(R.string.recognition_result, text)
-            mainHandler.postDelayed(
-                { returnToPreviousInputMethod(showPickerOnFailure = false) },
-                RETURN_TO_PREVIOUS_IME_DELAY_MS,
-            )
+            if (activeSettings.autoReturnToPreviousIme) {
+                mainHandler.postDelayed(
+                    { returnToPreviousInputMethod(showPickerOnFailure = false) },
+                    RETURN_TO_PREVIOUS_IME_DELAY_MS,
+                )
+            }
         } else {
             statusView.text = getString(R.string.recognition_error, "无法提交识别文字")
         }
@@ -448,9 +513,14 @@ class VoiceInputService : InputMethodService() {
     private fun updateRecordingStatus() {
         if (::statusView.isInitialized) {
             statusView.text = getString(
-                R.string.recording_active,
+                if (activeSettings.vadEnabled) {
+                    R.string.recording_active
+                } else {
+                    R.string.recording_active_without_vad
+                },
                 elapsedSeconds(),
                 pcmBuffer.size(),
+                activeSettings.silenceDurationSeconds,
             )
         }
     }
