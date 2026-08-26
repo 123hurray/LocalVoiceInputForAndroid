@@ -9,9 +9,9 @@ import android.inputmethodservice.InputMethodService
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
@@ -29,6 +29,7 @@ class VoiceInputService : InputMethodService() {
     private lateinit var statusView: TextView
     private lateinit var modelStatusView: TextView
     private lateinit var recordButton: Button
+    private lateinit var cancelButton: Button
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pcmBuffer = PcmSampleBuffer(SAMPLE_RATE * MAX_RECORDING_SECONDS)
@@ -41,11 +42,15 @@ class VoiceInputService : InputMethodService() {
     @Volatile
     private var senseVoiceAsr: SenseVoiceAsr? = null
     @Volatile
+    private var vadDetector: SileroVadDetector? = null
+    @Volatile
     private var isModelLoading = false
     @Volatile
     private var isDestroyed = false
     @Volatile
     private var isRecognizing = false
+    private var isInputViewActive = false
+    private var autoStartConsumed = false
 
     override fun onCreateInputView(): View {
         val padding = (16 * resources.displayMetrics.density).toInt()
@@ -74,6 +79,12 @@ class VoiceInputService : InputMethodService() {
             }
         }
 
+        cancelButton = Button(this).apply {
+            text = getString(R.string.cancel_recording)
+            isEnabled = false
+            setOnClickListener { cancelRecording() }
+        }
+
         val returnButton = Button(this).apply {
             text = getString(R.string.return_to_fcitx)
             setOnClickListener { returnToPreviousInputMethod(showPickerOnFailure = true) }
@@ -87,6 +98,7 @@ class VoiceInputService : InputMethodService() {
             addView(modelStatusView, matchWidthWrapHeight())
             addView(statusView, matchWidthWrapHeight())
             addView(recordButton, matchWidthWrapHeight())
+            addView(cancelButton, matchWidthWrapHeight())
             addView(returnButton, matchWidthWrapHeight())
             ensureModelLoaded()
         }
@@ -94,12 +106,18 @@ class VoiceInputService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        if (!isInputViewActive) {
+            autoStartConsumed = false
+        }
+        isInputViewActive = true
         if (::recordButton.isInitialized && !isRecording) {
             recordButton.text = getString(R.string.start_recording)
         }
+        maybeAutoStartRecording()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        isInputViewActive = false
         stopRecording(shouldRecognize = false)
         super.onFinishInputView(finishingInput)
     }
@@ -111,26 +129,37 @@ class VoiceInputService : InputMethodService() {
             senseVoiceAsr?.close()
             senseVoiceAsr = null
         }
+        vadDetector?.close()
+        vadDetector = null
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
     private fun ensureModelLoaded() {
-        if (senseVoiceAsr != null || isModelLoading) return
+        if ((senseVoiceAsr != null && vadDetector != null) || isModelLoading) return
         isModelLoading = true
         modelStatusView.text = getString(R.string.model_loading)
         thread(name = "LocalVoiceIME-SenseVoice-Init") {
             try {
                 val recognizer = SenseVoiceAsr(assets)
-                if (isDestroyed) {
-                    recognizer.close()
-                } else {
-                    senseVoiceAsr = recognizer
-                    mainHandler.post {
-                        if (::modelStatusView.isInitialized) {
-                            modelStatusView.text = getString(R.string.model_ready)
+                try {
+                    val detector = SileroVadDetector(assets)
+                    if (isDestroyed) {
+                        detector.close()
+                        recognizer.close()
+                    } else {
+                        senseVoiceAsr = recognizer
+                        vadDetector = detector
+                        mainHandler.post {
+                            if (::modelStatusView.isInitialized) {
+                                modelStatusView.text = getString(R.string.model_ready)
+                            }
+                            maybeAutoStartRecording()
                         }
                     }
+                } catch (error: Throwable) {
+                    recognizer.close()
+                    throw error
                 }
             } catch (error: Throwable) {
                 mainHandler.post {
@@ -159,9 +188,22 @@ class VoiceInputService : InputMethodService() {
         startRecording()
     }
 
+    private fun maybeAutoStartRecording() {
+        if (!isInputViewActive || autoStartConsumed || isRecording || isRecognizing) return
+        if (senseVoiceAsr == null || vadDetector == null) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            if (::statusView.isInitialized) {
+                statusView.text = getString(R.string.tap_to_grant_microphone)
+            }
+            return
+        }
+        autoStartConsumed = true
+        startRecording()
+    }
+
     private fun startRecording() {
         if (isRecording || isRecognizing) return
-        if (senseVoiceAsr == null) {
+        if (senseVoiceAsr == null || vadDetector == null) {
             showRecognitionError(getString(R.string.model_not_ready))
             ensureModelLoaded()
             return
@@ -207,9 +249,11 @@ class VoiceInputService : InputMethodService() {
 
         audioRecord = recorder
         pcmBuffer.clear()
+        vadDetector?.reset()
         startedAtMs = SystemClock.elapsedRealtime()
         isRecording = true
         recordButton.text = getString(R.string.stop_recording)
+        cancelButton.isEnabled = true
         updateRecordingStatus()
 
         recordingThread = thread(name = "LocalVoiceIME-AudioRecord") {
@@ -219,7 +263,24 @@ class VoiceInputService : InputMethodService() {
                 when {
                     count > 0 -> {
                         val appended = pcmBuffer.append(samples, count)
-                        if (appended < count || pcmBuffer.size() >= MAX_BUFFERED_SAMPLES) {
+                        val speechCompleted = try {
+                            vadDetector?.accept(samples, count) == true
+                        } catch (error: Throwable) {
+                            mainHandler.post {
+                                showError("VAD：${error.message ?: error.javaClass.simpleName}")
+                            }
+                            break
+                        }
+                        if (speechCompleted) {
+                            isRecording = false
+                            mainHandler.post {
+                                if (::statusView.isInitialized) {
+                                    statusView.text = getString(R.string.vad_silence_detected)
+                                }
+                                stopRecording(shouldRecognize = true)
+                            }
+                            break
+                        } else if (appended < count || pcmBuffer.size() >= MAX_BUFFERED_SAMPLES) {
                             isRecording = false
                             mainHandler.post {
                                 if (::statusView.isInitialized) {
@@ -259,9 +320,13 @@ class VoiceInputService : InputMethodService() {
         }
         recordingThread = null
         recorder?.release()
+        vadDetector?.reset()
 
         if (::recordButton.isInitialized) {
             recordButton.text = getString(R.string.start_recording)
+        }
+        if (::cancelButton.isInitialized) {
+            cancelButton.isEnabled = false
         }
         if (::statusView.isInitialized && startedAtMs > 0L) {
             statusView.text = getString(
@@ -275,6 +340,14 @@ class VoiceInputService : InputMethodService() {
             recognizeBufferedAudio()
         } else {
             pcmBuffer.clear()
+        }
+    }
+
+    private fun cancelRecording() {
+        if (!isRecording && audioRecord == null) return
+        stopRecording(shouldRecognize = false)
+        if (::statusView.isInitialized) {
+            statusView.text = getString(R.string.recording_cancelled)
         }
     }
 
@@ -294,6 +367,7 @@ class VoiceInputService : InputMethodService() {
         val targetConnection = currentInputConnection
         isRecognizing = true
         recordButton.isEnabled = false
+        cancelButton.isEnabled = false
         statusView.text = getString(
             R.string.recognizing,
             samples.size.toFloat() / SAMPLE_RATE,

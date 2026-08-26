@@ -4,6 +4,7 @@
 .android-local
 /app/src/main/assets/sense-voice/model.int8.onnx
 /app/src/main/assets/sense-voice/tokens.txt
+/app/src/main/assets/sense-voice/silero_vad_v5.onnx
 /local.properties
 /.idea/caches
 /.idea/

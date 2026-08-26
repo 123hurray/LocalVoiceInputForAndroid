@@ -19,8 +19,8 @@ Data flow:
 
 ## Model assets
 
-- `app/src/main/assets/sense-voice/model.int8.onnx` and `tokens.txt` are local,
-  ignored files. Never add them to Git.
+- `app/src/main/assets/sense-voice/model.int8.onnx`, `tokens.txt`, and
+  `silero_vad_v5.onnx` are local, ignored files. Never add them to Git.
 - The model archive URL and SHA-256 are documented in `README.md` and
   `app/src/main/assets/sense-voice/README.md`.
 - Current runtime: sherpa-onnx 1.13.4, SenseVoice Small INT8, ARM64 only.

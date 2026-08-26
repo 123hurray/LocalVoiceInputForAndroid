@@ -16,6 +16,7 @@
 - 识别结果通过 `commitText()` 输入当前文本框
 - 识别完成后自动返回 Fcitx5，也可手动返回
 - 单次录音最长 60 秒
+- Silero VAD 检测停顿并自动结束录音
 - 输入目标变化保护
 - Android 8.0+，当前仅打包 `arm64-v8a`
 
@@ -55,6 +56,20 @@ tar -xjf /tmp/sensevoice-int8.tar.bz2 \
   sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt
 ```
 
+下载 Silero VAD v5：
+
+```bash
+curl -L --fail \
+  -o app/src/main/assets/sense-voice/silero_vad_v5.onnx \
+  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx"
+```
+
+VAD 模型 SHA-256：
+
+```text
+6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396
+```
+
 ## 构建与安装
 
 ```bash
@@ -76,10 +91,11 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 
 1. 将 Fcitx5 设为当前输入法。
 2. 点击 Fcitx5 工具栏的麦克风。
-3. 等待 SenseVoice 显示“已就绪”。
-4. 点击“开始录音”并说话。
-5. 点击“停止录音”。
-6. 识别文字自动输入，随后返回 Fcitx5。
+3. 等待模型就绪；LocalVoiceIME 会自动开始录音。
+4. 直接说话，说完停顿约 1 秒。
+5. VAD 自动结束录音，识别文字自动输入，随后返回 Fcitx5。
+
+也可以手动停止或取消本次录音。
 
 首次使用会请求麦克风权限。
 
