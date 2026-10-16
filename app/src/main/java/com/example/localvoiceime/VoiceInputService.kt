@@ -97,7 +97,7 @@ class VoiceInputService : InputMethodService() {
                     setPadding(0, 0, 0, 0)
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     setOnClickListener {
-                        if (recording || recognizing || draftText.isNotEmpty()) {
+                        if (recording || recognizing || draftTarget != null) {
                             android.widget.Toast.makeText(this@VoiceInputService, "请先完成或取消当前输入", android.widget.Toast.LENGTH_SHORT).show()
                         } else {
                             settings = settings.copy(correctionEnabled = !settings.correctionEnabled)
@@ -243,7 +243,7 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun startRecordingOrRequestPermission() {
-        if (recognizing || recording || !active || draftText.isNotEmpty()) return
+        if (recognizing || recording || !active || draftTarget != null) return
         utteranceAudio = null
         if (!canRecord) { status.text = "请先在设置中下载语音包"; return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -400,7 +400,7 @@ class VoiceInputService : InputMethodService() {
         correctionWords = CorrectionSelectionView(context)
         addView(android.widget.ScrollView(context).apply {
             isFillViewport = false
-            addView(correctionWords, android.widget.ScrollView.LayoutParams(-1, -2))
+            addView(correctionWords, FrameLayout.LayoutParams(-1, -2))
         }, LinearLayout.LayoutParams(-1, 0, 1f))
         fun small(label: String, action: () -> Unit) = Button(context).apply {
             text = label; textSize = 13f; isAllCaps = false; minWidth = 0
