@@ -21,6 +21,7 @@ class CorrectionSelectionView(context: Context) : View(context) {
     private var anchor: Tile? = null
     private var downX = 0f
     private var dragging = false
+    var onSelectionFinished: (() -> Unit)? = null
     var onSelectionChanged: (() -> Unit)? = null
 
     fun show(value: String) {
@@ -96,7 +97,7 @@ class CorrectionSelectionView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 anchor = null; parent.requestDisallowInterceptTouchEvent(false)
-                if (event.actionMasked == MotionEvent.ACTION_UP) performClick()
+                if (event.actionMasked == MotionEvent.ACTION_UP) { performClick(); onSelectionFinished?.invoke() }
             }
         }
         invalidate(); onSelectionChanged?.invoke()

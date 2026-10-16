@@ -109,9 +109,20 @@ object SpeechEngine {
         worker.execute {
             if (!pending.cancelled) {
                 val result = runCatching {
-                    val recognizer = get(app, model)
-                    // Do not retain the audio in a runnable-local variable during model loading.
-                    pending.takeSamples()?.let { recognizer.recognize(it) }
+                    if (model == AsrModel.PARAFORMER_STREAMING) {
+                        val recognizer = getStreaming(app)
+                        pending.takeSamples()?.let { samples ->
+                            val stream = recognizer.recognizer.createStream()
+                            try {
+                                stream.acceptWaveform(samples, 16000)
+                                recognizer.decode(stream)
+                                recognizer.finish(stream)
+                            } finally { stream.release() }
+                        }
+                    } else {
+                        val recognizer = get(app, model)
+                        pending.takeSamples()?.let { recognizer.recognize(it) }
+                    }
                 }
                 if (!pending.cancelled) main.post {
                     if (!pending.cancelled) callback(result.map { it.orEmpty() })
