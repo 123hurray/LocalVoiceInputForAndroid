@@ -38,6 +38,12 @@ class VoiceInputService : InputMethodService() {
     private lateinit var candidateStrip: LinearLayout
     private lateinit var redoButton: Button
     private lateinit var sendButton: Button
+    private data class DraftSnapshot(
+        val text: String, val range: IntRange, val audio: FloatArray?,
+        val target: android.view.inputmethod.InputConnection, val request: Int,
+        val undo: List<String>, val alternatives: List<String>, val loaded: Boolean,
+    )
+    private var spokenEdit: DraftSnapshot? = null
     private var redoRecording = false
     private var candidateRunning = false
     private var candidateEpoch = 0
@@ -128,13 +134,11 @@ class VoiceInputService : InputMethodService() {
                 setPadding(dp(20), dp(20), dp(20), dp(8))
                 accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             }
-            addView(status)
             hint = TextView(context).apply {
-                text = "松手输入 · 上滑取消"; textSize = 13f; gravity = Gravity.CENTER
+                text = ""; textSize = 13f; gravity = Gravity.CENTER
                 setTextColor(VoiceStyle.muted)
                 setPadding(dp(20), 0, dp(20), dp(14))
             }
-            addView(hint)
 
             // The compact button is only a visual cue. The entire lower panel receives gestures.
             speechArea = LinearLayout(context).apply {
@@ -167,6 +171,8 @@ class VoiceInputService : InputMethodService() {
                 }
                 setOnClickListener { if (recording) stopRecording(true) else startRecordingOrRequestPermission() }
             }
+            speechArea.addView(status)
+            speechArea.addView(hint)
             preview = TextView(context).apply {
                 textSize = 20f; setTextColor(VoiceStyle.text); gravity = Gravity.TOP or Gravity.START
                 setPadding(0, dp(4), 0, dp(10))
@@ -179,15 +185,45 @@ class VoiceInputService : InputMethodService() {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             speechArea.addView(bars, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(12) })
-            hold = VoiceStyle.button(context, "按住说话").apply {
-                textSize = 16f
-                isClickable = false
-                isFocusable = false
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }
-            speechArea.addView(hold, LinearLayout.LayoutParams(dp(168), dp(52)))
             addView(speechArea, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(createCorrectionPanel(), LinearLayout.LayoutParams(-1, 0, 1f))
+            // A single footer owns the same recording control in every state.
+            addView(FrameLayout(context).apply {
+                setPadding(dp(12), 0, dp(12), 0)
+                hold = VoiceStyle.button(context, "按住说话").apply {
+                    textSize = 15f
+                    setOnTouchListener { view, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                downY = event.rawY; cancelGesture = false
+                                view.parent.requestDisallowInterceptTouchEvent(true)
+                                if (draftTarget != null) startRedo() else startRecordingOrRequestPermission()
+                            }
+                            MotionEvent.ACTION_MOVE -> if (recording) {
+                                cancelGesture = downY - event.rawY > dp(64); updateRecordingUi()
+                            }
+                            MotionEvent.ACTION_UP -> {
+                                view.parent.requestDisallowInterceptTouchEvent(false)
+                                if (recording) stopRecording(!cancelGesture)
+                            }
+                            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> if (recording) stopRecording(false)
+                        }
+                        true
+                    }
+                    setOnClickListener {
+                        if (recording) stopRecording(true)
+                        else if (draftTarget != null) startRedo() else startRecordingOrRequestPermission()
+                    }
+                }
+                redoButton = hold
+                addView(hold, FrameLayout.LayoutParams(dp(144), dp(52), Gravity.CENTER))
+                sendButton = VoiceStyle.button(context, "输入", primary = true).apply {
+                    textSize = 14f; minWidth = 0; setPadding(0, 0, 0, 0)
+                    visibility = View.INVISIBLE
+                    setOnClickListener { confirmCorrection() }
+                }
+                addView(sendButton, FrameLayout.LayoutParams(dp(64), dp(52), Gravity.END or Gravity.CENTER_VERTICAL))
+            }, LinearLayout.LayoutParams(-1, dp(64)))
         }
     }
 
@@ -220,7 +256,7 @@ class VoiceInputService : InputMethodService() {
             return
         }
         status.text = "按住，说出你想写的"
-        hint.text = "松手输入 · 上滑取消"
+        hint.text = ""
         hold.isEnabled = true
         SpeechEngine.prepare(this, settings.asrModel) { result ->
             if (!destroyed && active && request == generation) {
@@ -228,7 +264,7 @@ class VoiceInputService : InputMethodService() {
                 // Preparation must never interrupt the hold gesture or overwrite its feedback.
                 if (!recording && !recognizing) {
                     status.text = if (ready) "按住，说出你想写的" else "暂时无法使用"
-                    hint.text = if (ready) "松手输入 · 上滑取消" else "请到设置中检查语音包"
+                    hint.text = if (ready) "" else "请到设置中检查语音包"
                 } else if (recognizing && ready) {
                     status.text = "正在识别…"
                     hint.text = "稍等片刻"
@@ -290,13 +326,16 @@ class VoiceInputService : InputMethodService() {
                 if (!destroyed && active && request == generation && recording && streamingSpeech === session) {
                     preview.text = text
                     preview.post { preview.layout?.let { layout -> preview.scrollTo(0, max(0, layout.height - preview.height)) } }
-                    if (redoRecording) correctionWords.show(text)
+                    if (redoRecording) correctionWords.show(spokenEdit?.let { SpokenReplacement.apply(it.text, it.range, text) } ?: text)
                 }
             }, final = { result ->
                 if (!destroyed && active && request == generation && streamingSpeech === session) {
+                    val interruptedEdit = recording && spokenEdit != null
                     if (recording) stopRecording(false)
                     streamingSpeech = null
-                    completeRecognition(result, target, request)
+                    if (interruptedEdit) {
+                        android.widget.Toast.makeText(this, "录音中断，已保留原文", android.widget.Toast.LENGTH_SHORT).show()
+                    } else completeRecognition(result, target, request)
                 }
             })
             streamingSpeech = session
@@ -333,7 +372,7 @@ class VoiceInputService : InputMethodService() {
         recorder = null; recording = false
         val wasRedo = redoRecording
         redoRecording = false
-        if (wasRedo) redoButton.text = "按住重录"
+        if (wasRedo) redoButton.text = "按住重说"
         main.removeCallbacks(ticker)
         runCatching { audio.stop() }
         recordingThread?.join(500)
@@ -344,15 +383,15 @@ class VoiceInputService : InputMethodService() {
         if (!submit) {
             streamingSpeech?.cancel(); streamingSpeech = null
             preview.text = ""; preview.visibility = View.GONE
-            pcm.clear(); if (wasRedo) clearCorrection()
-            status.visibility = View.VISIBLE
+            pcm.clear(); if (wasRedo) restoreSpokenEdit()
+            status.visibility = if (draftTarget == null) View.VISIBLE else View.GONE
             status.text = "已取消"; hint.text = "按住说话 · 松手输入"; return
         }
         if (pcm.size() < SAMPLE_RATE / 4) {
             streamingSpeech?.cancel(); streamingSpeech = null; pcm.clear()
             preview.text = ""; preview.visibility = View.GONE
-            if (wasRedo) clearCorrection()
-            status.visibility = View.VISIBLE
+            if (wasRedo) restoreSpokenEdit()
+            status.visibility = if (draftTarget == null) View.VISIBLE else View.GONE
             status.text = "说话时间太短，请重试"; return
         }
         utteranceAudio = if (settings.correctionEnabled) pcm.toNormalizedFloatArray() else null
@@ -381,6 +420,23 @@ class VoiceInputService : InputMethodService() {
         recognizing = false
         hold.isEnabled = true
         val text = result.getOrNull().orEmpty().trim()
+        val edit = spokenEdit
+        if (edit != null) {
+            if (result.isSuccess && text.isNotBlank() && edit.request == generation && destination != null) {
+                val combined = SpokenReplacement.apply(edit.text, edit.range, text)
+                val fullReplacement = edit.range.first == 0 && edit.range.last + 1 == edit.text.length
+                spokenEdit = null
+                showCorrection(combined, destination, request)
+                draftUndo.addAll(edit.undo); draftUndo.addLast(edit.text)
+                // A partial recording cannot be used as the whole edited sentence's audio.
+                if (!fullReplacement) draftAudio = null
+                renderCandidates()
+            } else {
+                restoreSpokenEdit()
+                android.widget.Toast.makeText(this, "没有替换成功，已保留原文", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         if (preview.visibility == View.VISIBLE) preview.text = text
         if (result.isSuccess && text.isNotBlank() && target != null && destination != null && settings.correctionEnabled) {
             showCorrection(text, destination, request)
@@ -416,32 +472,6 @@ class VoiceInputService : InputMethodService() {
         correctionPanel = this
         orientation = LinearLayout.VERTICAL; visibility = View.GONE
         setPadding(dp(12), 0, dp(12), dp(6))
-        fun quiet(label: String, action: () -> Unit) = Button(context).apply {
-            text = label; textSize = 12f; isAllCaps = false; minWidth = 0
-            setPadding(dp(2), 0, dp(2), 0); setTextColor(VoiceStyle.muted)
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            setOnClickListener { action() }
-        }
-        addView(LinearLayout(context).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(TextView(context).apply {
-                text = "点选或滑选字词"; textSize = 12f; setTextColor(VoiceStyle.muted)
-            }, LinearLayout.LayoutParams(0, dp(36), 1f))
-            val units = quiet("按词") { }
-            units.setOnClickListener {
-                if (!recording) {
-                    correctionWords.toggleUnits()
-                    units.text = if (correctionWords.characters) "按字" else "按词"
-                    renderCandidates()
-                }
-            }
-            addView(units, LinearLayout.LayoutParams(dp(48), dp(36)))
-            addView(quiet("撤销") {
-                if (!recording && draftUndo.isNotEmpty()) {
-                    draftText = draftUndo.removeLast(); correctionWords.show(draftText); renderCandidates()
-                }
-            }, LinearLayout.LayoutParams(dp(48), dp(36)))
-        })
         correctionWords = CorrectionSelectionView(context).apply {
             onSelectionFinished = { if (!recording) requestAlternatives() }
         }
@@ -453,48 +483,40 @@ class VoiceInputService : InputMethodService() {
             isHorizontalScrollBarEnabled = false
             addView(candidateStrip, FrameLayout.LayoutParams(-2, -1))
         }, LinearLayout.LayoutParams(-1, dp(44)))
-        addView(LinearLayout(context).apply {
-            redoButton = quiet("按住重录") { if (recording && redoRecording) stopRecording(true) else startRedo() }
-            redoButton.setOnTouchListener { view, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downY = event.rawY; cancelGesture = false
-                        view.parent.requestDisallowInterceptTouchEvent(true)
-                        startRedo()
-                    }
-                    MotionEvent.ACTION_MOVE -> if (redoRecording && recording) {
-                        cancelGesture = downY - event.rawY > dp(64)
-                        redoButton.text = if (cancelGesture) "松手取消" else "松手结束"
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        view.parent.requestDisallowInterceptTouchEvent(false)
-                        if (redoRecording && recording) stopRecording(!cancelGesture)
-                    }
-                    MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> if (redoRecording) stopRecording(false)
-                }
-                true
-            }
-            addView(redoButton, LinearLayout.LayoutParams(0, dp(48), 1f))
-            sendButton = VoiceStyle.button(context, "输入", primary = true).apply {
-                minWidth = 0; setPadding(0, 0, 0, 0); setOnClickListener { confirmCorrection() }
-            }
-            addView(sendButton, LinearLayout.LayoutParams(0, dp(48), 1f))
-        })
+
     }
 
     private fun startRedo() {
         if (recording || !active) return
         pendingSpeech?.cancel(); pendingSpeech = null; recognizing = false
+        val target = draftTarget ?: return
+        val snapshot = DraftSnapshot(draftText,
+            correctionWords.selection ?: (0 until draftText.length), draftAudio, target, draftGeneration,
+            draftUndo.toList(), otherResults.toList(), candidatesLoaded)
         clearCorrection(restorePanel = false)
+        spokenEdit = snapshot
         redoRecording = true
         startRecordingOrRequestPermission()
-        if (!recording) { redoRecording = false; clearCorrection(); return }
+        if (!recording) { redoRecording = false; restoreSpokenEdit(); return }
         correctionPanel.visibility = View.VISIBLE; speechArea.visibility = View.GONE
         status.visibility = View.GONE; hint.visibility = View.GONE
         correctionWords.isEnabled = false
         correctionWords.show("")
         candidateStrip.removeAllViews()
-        redoButton.text = "松手结束"; sendButton.isEnabled = false
+        redoButton.text = "松手替换"; sendButton.isEnabled = false
+    }
+
+    private fun restoreSpokenEdit() {
+        val edit = spokenEdit
+        spokenEdit = null
+        if (edit == null || !active || edit.request != generation || currentInputConnection == null) {
+            clearCorrection(); return
+        }
+        utteranceAudio = edit.audio
+        showCorrection(edit.text, edit.target, edit.request)
+        draftUndo.addAll(edit.undo)
+        otherResults.addAll(edit.alternatives); candidatesLoaded = edit.loaded
+        renderCandidates()
     }
 
     private fun showCorrection(text: String, target: android.view.inputmethod.InputConnection, request: Int) {
@@ -504,23 +526,25 @@ class VoiceInputService : InputMethodService() {
         correctionWords.isEnabled = true; correctionWords.show(text)
         speechArea.visibility = View.GONE; status.visibility = View.GONE; hint.visibility = View.GONE
         correctionPanel.visibility = View.VISIBLE
-        redoButton.text = "按住重录"; sendButton.isEnabled = true
+        redoButton.text = "按住重说"; sendButton.isEnabled = true; sendButton.visibility = View.VISIBLE
         renderCandidates()
     }
 
     private fun clearCorrection(restorePanel: Boolean = true) {
         candidateEpoch++; candidateRunning = false; candidatesLoaded = false
+        spokenEdit = null
         draftText = ""; draftAudio = null; utteranceAudio = null; draftTarget = null
         otherResults.clear(); draftUndo.clear()
         if (::correctionPanel.isInitialized) {
             correctionWords.show(""); correctionWords.isEnabled = true
             candidateStrip.removeAllViews(); sendButton.isEnabled = true
+            if (restorePanel) sendButton.visibility = View.INVISIBLE
             if (restorePanel) {
                 correctionPanel.visibility = View.GONE; speechArea.visibility = View.VISIBLE
                 preview.text = ""; preview.visibility = View.GONE
                 bars.visibility = if (settings.keyboardHeightDp < 280) View.GONE else View.VISIBLE
                 status.visibility = View.VISIBLE; hint.visibility = View.VISIBLE
-                hint.text = "松手输入 · 上滑取消"
+                hint.text = ""
             }
         }
     }
@@ -554,10 +578,16 @@ class VoiceInputService : InputMethodService() {
     private fun renderCandidates() {
         candidateStrip.removeAllViews()
         val range = correctionWords.selection
-        fun note(text: String) { candidateStrip.addView(TextView(this).apply {
-            this.text = text; textSize = 12f; setTextColor(VoiceStyle.muted); setPadding(dp(8), 0, dp(8), 0)
-        }) }
-        if (range == null) { note("点选字词即可查看候选"); return }
+        if (draftUndo.isNotEmpty()) candidateStrip.addView(Button(this).apply {
+            text = "撤销"; textSize = 12f; minWidth = 0
+            setTextColor(VoiceStyle.muted); setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setOnClickListener {
+                if (!recording && draftUndo.isNotEmpty()) {
+                    draftText = draftUndo.removeLast(); correctionWords.show(draftText); renderCandidates()
+                }
+            }
+        }, LinearLayout.LayoutParams(-2, dp(40)))
+        if (range == null) return
         val selected = correctionWords.selectedText()
         val options = linkedSetOf<String>()
         otherResults.forEach { result ->
@@ -574,11 +604,7 @@ class VoiceInputService : InputMethodService() {
             setTextColor(VoiceStyle.muted); setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setOnClickListener { replaceSelected("") }
         }, LinearLayout.LayoutParams(-2, dp(40)))
-        when {
-            candidateRunning -> note("正在补充候选…")
-            candidatesLoaded && options.isEmpty() -> note("暂无不同建议")
-            !candidatesLoaded -> note("需要另一款已下载语音包")
-        }
+
     }
 
     private fun requestAlternatives() {
@@ -620,10 +646,10 @@ class VoiceInputService : InputMethodService() {
         // Count accepted PCM, so the timer cannot advance before audio arrives or during a read stall.
         val seconds = pcm.size() / SAMPLE_RATE
         status.text = if (cancelGesture) "松手取消" else "正在听你说…"
-        hint.text = if (cancelGesture) "移回按钮，继续说话" else "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}  ·  上滑取消"
+        hint.text = if (cancelGesture) "移回按钮，继续说话" else "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
         hold.text = if (cancelGesture) "松手取消" else "松手输入"
         hold.background = VoiceStyle.rounded(this, if (cancelGesture) VoiceStyle.danger else VoiceStyle.accent)
-        if (redoRecording) redoButton.text = if (cancelGesture) "松手取消" else "松手结束 · ${seconds}s"
+        if (redoRecording) redoButton.text = if (cancelGesture) "松手取消" else "松手替换 · ${seconds}s"
         bars.recording = true; bars.level = level; bars.cancelling = cancelGesture; bars.invalidate()
     }
     private fun cancelPendingSpeech() {

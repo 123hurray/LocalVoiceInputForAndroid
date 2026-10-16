@@ -10,13 +10,12 @@ import android.view.View
 import java.util.Locale
 import kotlin.math.max
 
-/** Word tiles with drag-to-select; character mode uses Unicode grapheme boundaries. */
+/** Character tiles with drag-to-select, using Unicode grapheme boundaries. */
 class CorrectionSelectionView(context: Context) : View(context) {
     private data class Tile(val start: Int, val end: Int, val box: RectF)
     private val tiles = mutableListOf<Tile>()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 18 * resources.displayMetrics.scaledDensity }
     var text: String = ""; private set
-    var characters = false; private set
     var selection: IntRange? = null; private set
     private var anchor: Tile? = null
     private var downX = 0f
@@ -28,7 +27,6 @@ class CorrectionSelectionView(context: Context) : View(context) {
         text = value; selection = null; contentDescription = value
         requestLayout(); invalidate(); onSelectionChanged?.invoke()
     }
-    fun toggleUnits() { characters = !characters; show(text) }
     fun selectedText(): String = selection?.let { text.substring(it.first, it.last + 1) }.orEmpty()
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -37,8 +35,7 @@ class CorrectionSelectionView(context: Context) : View(context) {
         val lineHeight = max(dp(42).toFloat(), paint.fontSpacing + dp(16))
         var x = gap; var y = gap
         tiles.clear()
-        val iterator = if (characters) BreakIterator.getCharacterInstance(Locale.CHINA)
-            else BreakIterator.getWordInstance(Locale.CHINA)
+        val iterator = BreakIterator.getCharacterInstance(Locale.CHINA)
         iterator.setText(text)
         var start = iterator.first()
         var end = iterator.next()
