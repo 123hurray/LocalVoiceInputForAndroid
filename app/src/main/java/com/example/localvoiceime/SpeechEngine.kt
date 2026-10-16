@@ -28,12 +28,22 @@ object SpeechEngine {
         }
     }
 
-    fun recognize(context: Context, model: AsrModel, samples: FloatArray, callback: (Result<String>) -> Unit) {
+    fun recognize(context: Context, model: AsrModel, samples: FloatArray, callback: (Result<String>) -> Unit): PendingSpeech {
         val app = context.applicationContext
+        val pending = PendingSpeech(samples)
         worker.execute {
-            val result = runCatching { get(app, model).recognize(samples) }
-            main.post { callback(result) }
+            if (!pending.cancelled) {
+                val result = runCatching {
+                    val recognizer = get(app, model)
+                    // Do not retain the audio in a runnable-local variable during model loading.
+                    pending.takeSamples()?.let { recognizer.recognize(it) }
+                }
+                if (!pending.cancelled) main.post {
+                    if (!pending.cancelled) callback(result.map { it.orEmpty() })
+                }
+            }
         }
+        return pending
     }
 
     fun release() { worker.execute { engine?.close(); engine = null } }

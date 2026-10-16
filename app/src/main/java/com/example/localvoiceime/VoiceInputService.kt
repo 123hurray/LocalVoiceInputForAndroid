@@ -38,6 +38,8 @@ class VoiceInputService : InputMethodService() {
     @Volatile private var level = 0f
     private var recognizing = false
     private var ready = false
+    private var canRecord = false
+    private var pendingSpeech: PendingSpeech? = null
     private var active = false
     private var destroyed = false
     private var generation = 0
@@ -103,7 +105,7 @@ class VoiceInputService : InputMethodService() {
             }
             addView(hold, LinearLayout.LayoutParams(-1, dp(76)))
             addView(VoiceStyle.button(context, "返回键盘").apply {
-                setOnClickListener { stopRecording(false); returnToKeyboard(true) }
+                setOnClickListener { stopRecording(false); cancelPendingSpeech(); returnToKeyboard(true) }
             }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
         }
     }
@@ -111,25 +113,33 @@ class VoiceInputService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         if (recording) stopRecording(false)
+        cancelPendingSpeech()
         active = true
         val request = ++generation
         settings = VoiceSettingsStore(this).load()
         ready = false
-        if (!ModelRepository(this).isInstalled(settings.asrModel)) {
+        canRecord = ModelRepository(this).isInstalled(settings.asrModel)
+        if (!canRecord) {
             status.text = "先下载一个语音包"
             hint.text = "点击右上角设置，准备好就能使用"
             hold.isEnabled = true
             return
         }
-        status.text = "准备中…"
-        hold.isEnabled = false
+        status.text = "按住，说出你想写的"
+        hint.text = "松手输入 · 上滑取消"
+        hold.isEnabled = true
         if (settings.keepResident) ReadyService.start(this)
         SpeechEngine.prepare(this, settings.asrModel) { result ->
             if (!destroyed && active && request == generation) {
                 ready = result.isSuccess
-                hold.isEnabled = true
-                status.text = if (ready) "按住，说出你想写的" else "暂时无法使用"
-                hint.text = if (ready) "松手输入 · 上滑取消" else "请到设置中检查语音包"
+                // Preparation must never interrupt the hold gesture or overwrite its feedback.
+                if (!recording && !recognizing) {
+                    status.text = if (ready) "按住，说出你想写的" else "暂时无法使用"
+                    hint.text = if (ready) "松手输入 · 上滑取消" else "请到设置中检查语音包"
+                } else if (recognizing && ready) {
+                    status.text = "正在识别…"
+                    hint.text = "稍等片刻"
+                }
             }
         }
     }
@@ -137,11 +147,13 @@ class VoiceInputService : InputMethodService() {
     override fun onFinishInputView(finishingInput: Boolean) {
         active = false; generation++
         stopRecording(false)
+        cancelPendingSpeech()
         super.onFinishInputView(finishingInput)
     }
     override fun onDestroy() {
         destroyed = true; active = false; generation++
         stopRecording(false)
+        cancelPendingSpeech()
         main.removeCallbacksAndMessages(null)
         if (!VoiceSettingsStore(this).load().keepResident) SpeechEngine.release()
         super.onDestroy()
@@ -149,7 +161,7 @@ class VoiceInputService : InputMethodService() {
 
     private fun startRecordingOrRequestPermission() {
         if (recognizing || recording || !active) return
-        if (!ready) { status.text = "请先在设置中准备语音包"; return }
+        if (!canRecord) { status.text = "请先在设置中下载语音包"; return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             startActivity(Intent(this, MicrophonePermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return
@@ -210,12 +222,14 @@ class VoiceInputService : InputMethodService() {
         val samples = pcm.toNormalizedFloatArray(); pcm.clear()
         if (samples.size < SAMPLE_RATE / 4) { status.text = "说话时间太短，请重试"; return }
         recognizing = true; hold.isEnabled = false
-        status.text = "正在识别…"; hint.text = "稍等片刻"
+        status.text = if (ready) "正在识别…" else "正在处理…"
+        hint.text = if (ready) "稍等片刻" else "正在准备，很快就好"
         val target = currentInputConnection
         val request = generation
-        SpeechEngine.recognize(this, settings.asrModel, samples) { result ->
-            recognizing = false
+        pendingSpeech = SpeechEngine.recognize(this, settings.asrModel, samples) { result ->
             if (destroyed || !active || request != generation) return@recognize
+            pendingSpeech = null
+            recognizing = false
             hold.isEnabled = true
             val text = result.getOrNull().orEmpty().trim()
             when {
@@ -250,8 +264,15 @@ class VoiceInputService : InputMethodService() {
         hold.background = VoiceStyle.rounded(this, if (cancelGesture) VoiceStyle.danger else VoiceStyle.accent)
         bars.recording = true; bars.level = level; bars.cancelling = cancelGesture; bars.invalidate()
     }
+    private fun cancelPendingSpeech() {
+        pendingSpeech?.cancel()
+        pendingSpeech = null
+        recognizing = false
+        if (::hold.isInitialized) hold.isEnabled = true
+    }
     private fun openSettings() {
         stopRecording(false)
+        cancelPendingSpeech()
         startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
     @Suppress("DEPRECATION")
