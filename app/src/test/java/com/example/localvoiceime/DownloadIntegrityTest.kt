@@ -24,6 +24,17 @@ class DownloadIntegrityTest {
         assertFalse(DownloadIntegrity.validRange(null, 10, 100))
         assertFalse(DownloadIntegrity.validRange("bytes 9999999999999999999999-99/100", 10, 100))
     }
+    @Test fun whisperUsesEmptyAutoLanguageAndItsOwnVocabulary() {
+        val config = createAsrConfig(AsrModel.WHISPER_TINY) { "/private/$it" }
+        assertEquals("", config.whisper.language)
+        assertEquals("transcribe", config.whisper.task)
+        assertEquals("/private/tiny-tokens.txt", config.tokens)
+        assertEquals("/private/tiny-encoder.int8.onnx", config.whisper.encoder)
+        assertEquals("cpu", config.provider)
+        val sense = createAsrConfig(AsrModel.SENSE_VOICE) { it }
+        assertEquals("auto", sense.senseVoice.language)
+        assertTrue(sense.senseVoice.useInverseTextNormalization)
+    }
     @Test fun settingsUpgradeUsesDefaultAndWhisperHasSafeWindow() {
         assertEquals(AsrModel.SENSE_VOICE, AsrModel.fromId(null))
         assertEquals(AsrModel.SENSE_VOICE, AsrModel.fromId("removed-model"))
