@@ -1,5 +1,6 @@
 package com.example.localvoiceime
 
+import android.app.AlertDialog
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
@@ -20,7 +21,9 @@ class SettingsActivity : Activity() {
     private lateinit var selectedLabel: TextView
     private lateinit var quickStart: Switch
     private lateinit var autoReturn: Switch
-    private val rows = mutableMapOf<AsrModel, Triple<TextView, Button, Button>>()
+    private data class ModelRow(val progress: TextView, val download: Button, val use: Button, val delete: Button)
+    private val rows = mutableMapOf<AsrModel, ModelRow>()
+    private var deleting = false
     private val handler = Handler(Looper.getMainLooper())
     private var selected = AsrModel.SENSE_VOICE
     private var preparedModel: AsrModel? = null
@@ -122,10 +125,15 @@ class SettingsActivity : Activity() {
                     }
                 }
             }
+            val delete = VoiceStyle.button(this, "删除").apply {
+                setTextColor(VoiceStyle.muted)
+                setOnClickListener { confirmDelete(model) }
+            }
             buttons.addView(download, LinearLayout.LayoutParams(0, dp(50), 1f))
             buttons.addView(use, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(10) })
+            buttons.addView(delete, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(10) })
             card.addView(buttons)
-            rows[model] = Triple(progress, download, use)
+            rows[model] = ModelRow(progress, download, use, delete)
             page.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         }
         page.addView(label("首次准备需要一点时间。快速启动可减少之后的等待；系统清理后台后需要重新准备。", 13f, VoiceStyle.muted))
@@ -149,7 +157,7 @@ class SettingsActivity : Activity() {
         override fun run() { renderModels(); prepareSelected(); handler.postDelayed(this, 600) }
     }
     private fun prepareSelected() {
-        if (!quickStart.isChecked || !repository.isInstalled(selected) || preparedModel == selected) return
+        if (deleting || !quickStart.isChecked || !repository.isInstalled(selected) || preparedModel == selected) return
         preparedModel = selected
         SpeechEngine.prepare(this, selected) { /* Shared engine remains ready for the IME. */ }
     }
@@ -159,7 +167,7 @@ class SettingsActivity : Activity() {
         val state = ModelDownloads.state
         for ((model, row) in rows) {
             val installed = repository.isInstalled(model)
-            val (progress, download, use) = row
+            val (progress, download, use, delete) = row
             val active = state.model == model
             progress.text = when {
                 installed -> "已下载"
@@ -168,12 +176,37 @@ class SettingsActivity : Activity() {
                 else -> "约 ${repository.spec(model).size / 1024 / 1024} MB"
             }
             download.text = if (active && state.running) "暂停" else "下载"
-            download.isEnabled = !installed && (!state.running || active)
+            download.isEnabled = !deleting && !installed && (!state.running || active)
             download.alpha = if (download.isEnabled) 1f else 0.45f
             use.text = if (selected == model) "正在使用" else "使用"
-            use.isEnabled = installed && selected != model
-            use.alpha = if (installed) 1f else 0.4f
+            use.isEnabled = !deleting && installed && selected != model
+            use.alpha = if (use.isEnabled) 1f else 0.4f
+            delete.isEnabled = !deleting && !state.running && (repository.directory(model).exists() || repository.stagingDirectory(model).exists())
+            delete.alpha = if (delete.isEnabled) 1f else 0.35f
         }
+    }
+    private fun confirmDelete(model: AsrModel) {
+        if (deleting || ModelDownloads.state.running) return
+        AlertDialog.Builder(this)
+            .setTitle("删除${model.label}？")
+            .setMessage("删除本机语音包和未完成的下载，可随时重新下载。" +
+                if (selected == model) "当前选择的语音包删除后，需要重新下载或选择其他语音包。" else "")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ ->
+                deleting = true
+                renderModels()
+                SpeechEngine.deleteModel(this, model) { result ->
+                    deleting = false
+                    if (result.isSuccess) ModelDownloads.clearDeletedState(model)
+                    preparedModel = null
+                    if (!isFinishing && !isDestroyed) {
+                        renderModels()
+                        android.widget.Toast.makeText(this,
+                            if (result.isSuccess) "已删除" else "删除未完成，请重试",
+                            android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }.show()
     }
     private fun description(model: AsrModel) = when (model) {
         AsrModel.SENSE_VOICE -> "推荐用于日常中文和中英混合输入。"

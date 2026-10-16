@@ -46,5 +46,18 @@ object SpeechEngine {
         return pending
     }
 
+    fun deleteModel(context: Context, model: AsrModel, callback: (Result<Unit>) -> Unit) {
+        val app = context.applicationContext
+        worker.execute {
+            val result = runCatching {
+                if (engine?.model == model) { engine?.close(); engine = null }
+                val repository = ModelRepository(app)
+                check(repository.directory(model).deleteRecursively()) { "无法删除语音包，请重试" }
+                check(repository.stagingDirectory(model).deleteRecursively()) { "无法删除下载缓存，请重试" }
+            }
+            main.post { callback(result) }
+        }
+    }
+
     fun release() { worker.execute { engine?.close(); engine = null } }
 }

@@ -11,7 +11,6 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -19,6 +18,7 @@ import android.view.Window
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -48,7 +48,6 @@ class VoiceInputService : InputMethodService() {
     private var generation = 0
     private var downY = 0f
     private var cancelGesture = false
-    private var startedAt = 0L
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
@@ -69,15 +68,23 @@ class VoiceInputService : InputMethodService() {
             addView(LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(20), 0, dp(20), 0)
-                addView(VoiceStyle.button(context, "返回键盘").apply {
-                    textSize = 14f
+                addView(Button(context).apply {
+                    text = "< 返回键盘"; textSize = 14f; isAllCaps = false
+                    setTextColor(VoiceStyle.muted)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    setPadding(0, 0, 0, 0)
+                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
                     setOnClickListener { stopRecording(false); cancelPendingSpeech(); returnToKeyboard(true) }
-                }, LinearLayout.LayoutParams(dp(120), dp(44)))
+                }, LinearLayout.LayoutParams(dp(112), dp(48)))
                 addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-                addView(VoiceStyle.button(context, "设置").apply {
-                    textSize = 14f
+                addView(ImageButton(context).apply {
+                    setImageResource(R.drawable.ic_settings)
+                    imageTintList = android.content.res.ColorStateList.valueOf(VoiceStyle.muted)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    setPadding(dp(13), dp(13), dp(13), dp(13))
+                    contentDescription = "设置"
                     setOnClickListener { openSettings() }
-                }, LinearLayout.LayoutParams(dp(76), dp(44)))
+                }, LinearLayout.LayoutParams(dp(48), dp(48)))
             })
             status = TextView(context).apply {
                 text = "按住，说出你想写的"; textSize = 22f; gravity = Gravity.CENTER
@@ -213,7 +220,7 @@ class VoiceInputService : InputMethodService() {
             audio.release(); status.text = "无法录音，请检查麦克风权限"; return
         }
         recorder = audio; pcm.clear(); recording = true
-        startedAt = SystemClock.elapsedRealtime(); cancelGesture = false
+        cancelGesture = false
         updateRecordingUi()
         val request = generation
         val limit = settings.asrModel.recordingLimitSeconds * SAMPLE_RATE
@@ -293,7 +300,8 @@ class VoiceInputService : InputMethodService() {
         }
     }
     private fun updateRecordingUi() {
-        val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1000
+        // Count accepted PCM, so the timer cannot advance before audio arrives or during a read stall.
+        val seconds = pcm.size() / SAMPLE_RATE
         status.text = if (cancelGesture) "松手取消" else "正在听你说…"
         hint.text = if (cancelGesture) "移回按钮，继续说话" else "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}  ·  上滑取消"
         hold.text = if (cancelGesture) "松手取消" else "松手输入"

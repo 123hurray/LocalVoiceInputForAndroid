@@ -64,6 +64,10 @@ object ModelDownloads {
         }
     }
 
+    @Synchronized fun clearDeletedState(model: AsrModel) {
+        if (!state.running && state.model == model) state = State()
+    }
+
     fun cancel() { cancelled = true }
     private fun checkCancelled() { if (cancelled) throw InterruptedIOException() }
 
