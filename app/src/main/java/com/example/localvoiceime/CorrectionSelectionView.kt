@@ -5,100 +5,161 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.icu.text.BreakIterator
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
-/** Character tiles with drag-to-select, using Unicode grapheme boundaries. */
+/** Unicode character grid: swipe horizontally or hold then drag across rows to select. */
 class CorrectionSelectionView(context: Context) : View(context) {
-    private data class Tile(val start: Int, val end: Int, val box: RectF)
+    private data class Tile(val start: Int, val end: Int, val row: Int, val box: RectF)
     private val tiles = mutableListOf<Tile>()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 18 * resources.displayMetrics.scaledDensity }
-    var text: String = ""; private set
+    var text = ""; private set
     var selection: IntRange? = null; private set
+    var isRangeSelecting = false; private set
+    var rowPitch = dp(46); private set
+    private var viewportHeight = 0
+    private var rowHeight = dp(42)
     private var anchor: Tile? = null
+    private var previousSelection: IntRange? = null
     private var downX = 0f
-    private var dragging = false
+    private var downY = 0f
+    private var lastX = 0f
+    private var viewportY = 0f
+    private var scrolling = false
+    private val slop = ViewConfiguration.get(context).scaledTouchSlop
     var onSelectionFinished: (() -> Unit)? = null
     var onSelectionChanged: (() -> Unit)? = null
+    private val held = Runnable {
+        if (anchor != null && !scrolling) {
+            isRangeSelecting = true
+            parent.requestDisallowInterceptTouchEvent(true)
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
+    }
+    private val autoScroll = object : Runnable {
+        override fun run() {
+            val scroll = parent as? CorrectionScrollView ?: return
+            if (!isRangeSelecting || anchor == null) return
+            val edge = minOf(dp(32), scroll.height / 3).coerceAtLeast(1)
+            val delta = when {
+                viewportY < edge -> -dp(8)
+                viewportY > scroll.height - edge -> dp(8)
+                else -> return
+            }
+            val before = scroll.scrollY
+            scroll.scrollBy(0, delta)
+            updateRange(lastX, viewportY + scroll.scrollY - top)
+            if (scroll.scrollY != before) postDelayed(this, 16)
+        }
+    }
 
+    fun setViewportHeight(value: Int) {
+        if (value > 0 && value != viewportHeight) { viewportHeight = value; forceLayout() }
+    }
     fun show(value: String) {
+        removeCallbacks(held); removeCallbacks(autoScroll)
+        anchor = null; isRangeSelecting = false
         text = value; selection = null; contentDescription = value
         requestLayout(); invalidate(); onSelectionChanged?.invoke()
+        (parent as? CorrectionScrollView)?.scrollTo(0, 0)
     }
-    fun selectedText(): String = selection?.let { text.substring(it.first, it.last + 1) }.orEmpty()
+    fun selectedText() = selection?.let { text.substring(it.first, it.last + 1) }.orEmpty()
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec).coerceAtLeast(1)
-        val gap = dp(5).toFloat()
-        val lineHeight = max(dp(42).toFloat(), paint.fontSpacing + dp(16))
-        var x = gap; var y = gap
+        val gap = dp(4)
+        val inset = dp(2)
+        val rows = CorrectionGrid.rows(viewportHeight.coerceAtLeast(dp(46)),
+            max(dp(42), (paint.fontSpacing + dp(12)).toInt()),
+            (paint.fontSpacing + dp(6)).toInt(), gap, inset)
+        rowPitch = rows.pitch; rowHeight = (rowPitch - gap).coerceAtLeast(1)
+        val columns = CorrectionGrid.columns((width - 2 * inset).coerceAtLeast(1),
+            max(dp(32).toFloat(), paint.textSize + dp(12)), gap.toFloat())
         tiles.clear()
-        val iterator = BreakIterator.getCharacterInstance(Locale.CHINA)
-        iterator.setText(text)
-        var start = iterator.first()
-        var end = iterator.next()
+        val iterator = BreakIterator.getCharacterInstance(Locale.CHINA).apply { setText(text) }
+        var start = iterator.first(); var end = iterator.next()
+        var row = 0; var column = 0
         while (end != BreakIterator.DONE) {
-            val word = text.substring(start, end)
-            if (word.isNotBlank()) {
-                // Very long unbroken words fall back to character-sized tiles.
-                val parts = if (paint.measureText(word) + dp(16) > width - 2 * gap) {
-                    val chars = BreakIterator.getCharacterInstance(Locale.CHINA).apply { setText(word) }
-                    val ranges = mutableListOf<Pair<Int, Int>>()
-                    var a = chars.first(); var b = chars.next()
-                    while (b != BreakIterator.DONE) { ranges.add((start + a) to (start + b)); a = b; b = chars.next() }
-                    ranges
-                } else listOf(start to end)
-                for ((a, b) in parts) {
-                    val w = (paint.measureText(text, a, b) + dp(16)).coerceAtMost(width - 2 * gap)
-                    if (x + w > width - gap) { x = gap; y += lineHeight + gap }
-                    tiles.add(Tile(a, b, RectF(x, y, x + w, y + lineHeight)))
-                    x += w + gap
-                }
+            val value = text.substring(start, end)
+            if (value.contains('\n')) { row++; column = 0 }
+            else if (value.isNotBlank()) {
+                if (column == columns.count) { row++; column = 0 }
+                val x = inset + column * (columns.cellWidth + gap)
+                val y = inset + row * rowPitch
+                tiles.add(Tile(start, end, row, RectF(x, y.toFloat(), x + columns.cellWidth, (y + rowHeight).toFloat())))
+                column++
             }
-            if (word.contains('\n')) { x = gap; y += lineHeight + gap }
             start = end; end = iterator.next()
         }
-        setMeasuredDimension(width, (y + lineHeight + gap).toInt())
+        setMeasuredDimension(width, (row + 1) * rowPitch - gap + 2 * inset + rows.remainder)
     }
-
     override fun onDraw(canvas: Canvas) {
         for (tile in tiles) {
             val selected = selection?.let { tile.start <= it.last && tile.end > it.first } == true
             paint.color = if (selected) VoiceStyle.accent else VoiceStyle.surface
             canvas.drawRoundRect(tile.box, dp(6).toFloat(), dp(6).toFloat(), paint)
             paint.color = VoiceStyle.text
-            val baseline = tile.box.centerY() - (paint.ascent() + paint.descent()) / 2
-            canvas.drawText(text, tile.start, tile.end, tile.box.left + dp(8), baseline, paint)
+            val value = text.substring(tile.start, tile.end)
+            canvas.drawText(value, tile.box.centerX() - paint.measureText(value) / 2,
+                tile.box.centerY() - (paint.ascent() + paint.descent()) / 2, paint)
         }
     }
-
+    private fun updateRange(x: Float, y: Float) {
+        val first = anchor ?: return
+        val row = ((y - dp(2)) / rowPitch).toInt().coerceAtLeast(0)
+        val rowTiles = tiles.filter { it.row == row }.ifEmpty { tiles }
+        val last = rowTiles.minByOrNull { abs(it.box.centerY() - y) * 4 + abs(it.box.centerX() - x) } ?: return
+        selection = minOf(first.start, last.start) until maxOf(first.end, last.end)
+        invalidate(); onSelectionChanged?.invoke()
+    }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isEnabled) return false
-        val hit = tiles.firstOrNull { it.box.contains(event.x, event.y) }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                anchor = hit ?: return false
-                downX = event.x; dragging = false
-                selection = hit.start until hit.end
+                anchor = tiles.firstOrNull { it.box.contains(event.x, event.y) } ?: return false
+                previousSelection = selection
+                downX = event.x; downY = event.y; scrolling = false; isRangeSelecting = false
+                parent.requestDisallowInterceptTouchEvent(true)
+                selection = anchor!!.start until anchor!!.end
+                postDelayed(held, ViewConfiguration.getLongPressTimeout().toLong())
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!dragging && kotlin.math.abs(event.x - downX) > dp(8)) {
-                    dragging = true; parent.requestDisallowInterceptTouchEvent(true)
+                val dx = abs(event.x - downX); val dy = abs(event.y - downY)
+                if (!isRangeSelecting && max(dx, dy) > slop) {
+                    removeCallbacks(held)
+                    if (dy > dx) {
+                        scrolling = true; selection = previousSelection
+                        parent.requestDisallowInterceptTouchEvent(false)
+                    } else isRangeSelecting = true
                 }
-                if (!dragging) return true
-                val first = anchor ?: return false
-                val last = hit ?: tiles.minByOrNull { kotlin.math.abs(it.box.centerY() - event.y) * 4 + kotlin.math.abs(it.box.centerX() - event.x) }
-                if (last != null) selection = minOf(first.start, last.start) until maxOf(first.end, last.end)
+                if (isRangeSelecting) {
+                    lastX = event.x
+                    val scroll = parent as? CorrectionScrollView
+                    viewportY = event.y + top - (scroll?.scrollY ?: 0)
+                    updateRange(event.x, event.y)
+                    removeCallbacks(autoScroll); post(autoScroll)
+                }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                anchor = null; parent.requestDisallowInterceptTouchEvent(false)
-                if (event.actionMasked == MotionEvent.ACTION_UP) { performClick(); onSelectionFinished?.invoke() }
+                removeCallbacks(held); removeCallbacks(autoScroll)
+                val completed = event.actionMasked == MotionEvent.ACTION_UP && !scrolling
+                if (!completed) selection = previousSelection
+                anchor = null; isRangeSelecting = false
+                parent.requestDisallowInterceptTouchEvent(false)
+                (parent as? CorrectionScrollView)?.snapRows()
+                if (completed) { performClick(); onSelectionFinished?.invoke() }
             }
         }
         invalidate(); onSelectionChanged?.invoke()
         return true
+    }
+    override fun onDetachedFromWindow() {
+        removeCallbacks(held); removeCallbacks(autoScroll); super.onDetachedFromWindow()
     }
     override fun performClick(): Boolean { super.performClick(); return true }
     private fun dp(n: Int) = VoiceStyle.dp(context, n)

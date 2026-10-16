@@ -35,6 +35,8 @@ class VoiceInputService : InputMethodService() {
     private lateinit var speechArea: LinearLayout
     private lateinit var correctionPanel: LinearLayout
     private lateinit var correctionWords: CorrectionSelectionView
+    private lateinit var candidateStatus: TextView
+    private var candidateFailures = 0
     private lateinit var candidateStrip: LinearLayout
     private lateinit var redoButton: Button
     private lateinit var sendButton: Button
@@ -471,17 +473,31 @@ class VoiceInputService : InputMethodService() {
     private fun createCorrectionPanel() = LinearLayout(this).apply {
         correctionPanel = this
         orientation = LinearLayout.VERTICAL; visibility = View.GONE
-        setPadding(dp(12), 0, dp(12), dp(6))
+        setPadding(dp(4), 0, dp(4), dp(6))
         correctionWords = CorrectionSelectionView(context).apply {
             onSelectionFinished = { if (!recording) requestAlternatives() }
         }
-        addView(android.widget.ScrollView(context).apply {
-            addView(correctionWords, FrameLayout.LayoutParams(-1, -2))
-        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        addView(CorrectionScrollView(context, correctionWords), LinearLayout.LayoutParams(-1, 0, 1f))
         candidateStrip = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        addView(android.widget.HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(candidateStrip, FrameLayout.LayoutParams(-2, -1))
+        addView(LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            candidateStatus = TextView(context).apply {
+                textSize = 12f; setTextColor(VoiceStyle.muted)
+                setPadding(dp(4), 0, dp(4), 0)
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+                setOnClickListener {
+                    if (!candidateRunning && candidateFailures > 0) {
+                        candidatesLoaded = false; candidateFailures = 0; otherResults.clear()
+                        requestAlternatives()
+                    }
+                }
+            }
+            addView(candidateStatus, LinearLayout.LayoutParams(dp(108), -1))
+            addView(android.widget.HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = false; isVerticalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(candidateStrip, FrameLayout.LayoutParams(-2, -1))
+            }, LinearLayout.LayoutParams(0, -1, 1f))
         }, LinearLayout.LayoutParams(-1, dp(44)))
 
     }
@@ -502,7 +518,7 @@ class VoiceInputService : InputMethodService() {
         status.visibility = View.GONE; hint.visibility = View.GONE
         correctionWords.isEnabled = false
         correctionWords.show("")
-        candidateStrip.removeAllViews()
+        candidateStrip.removeAllViews(); candidateStatus.text = ""
         redoButton.text = "松手替换"; sendButton.isEnabled = false
     }
 
@@ -522,7 +538,7 @@ class VoiceInputService : InputMethodService() {
     private fun showCorrection(text: String, target: android.view.inputmethod.InputConnection, request: Int) {
         draftText = text; draftAudio = utteranceAudio; utteranceAudio = null
         draftTarget = target; draftGeneration = request; otherResults.clear(); draftUndo.clear()
-        candidatesLoaded = false; candidateRunning = false
+        candidatesLoaded = false; candidateRunning = false; candidateFailures = 0
         correctionWords.isEnabled = true; correctionWords.show(text)
         speechArea.visibility = View.GONE; status.visibility = View.GONE; hint.visibility = View.GONE
         correctionPanel.visibility = View.VISIBLE
@@ -531,13 +547,14 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun clearCorrection(restorePanel: Boolean = true) {
-        candidateEpoch++; candidateRunning = false; candidatesLoaded = false
+        candidateEpoch++; candidateRunning = false; candidatesLoaded = false; candidateFailures = 0
         spokenEdit = null
         draftText = ""; draftAudio = null; utteranceAudio = null; draftTarget = null
         otherResults.clear(); draftUndo.clear()
         if (::correctionPanel.isInitialized) {
             correctionWords.show(""); correctionWords.isEnabled = true
-            candidateStrip.removeAllViews(); sendButton.isEnabled = true
+            candidateStrip.removeAllViews(); candidateStatus.text = ""; candidateStatus.visibility = View.GONE
+            sendButton.isEnabled = true
             if (restorePanel) sendButton.visibility = View.INVISIBLE
             if (restorePanel) {
                 correctionPanel.visibility = View.GONE; speechArea.visibility = View.VISIBLE
@@ -592,7 +609,8 @@ class VoiceInputService : InputMethodService() {
                 }
             }
         }, LinearLayout.LayoutParams(-2, dp(40)))
-        if (range == null) return
+        if (range == null) { candidateStatus.text = ""; candidateStatus.visibility = View.GONE; return }
+        candidateStatus.visibility = View.VISIBLE
         val selected = correctionWords.selectedText()
         val options = linkedSetOf<String>()
         otherResults.forEach { result ->
@@ -600,6 +618,12 @@ class VoiceInputService : InputMethodService() {
                 if (it != selected && it.isNotEmpty()) options.add(it)
             }
         }
+        val hasModels = AsrModel.entries.any {
+            it != settings.asrModel && ModelRepository(this).isInstalled(it)
+        }
+        candidateStatus.text = CandidateFeedback.text(true, candidateRunning, draftAudio != null,
+            hasModels, candidatesLoaded, options.isNotEmpty(), candidateFailures)
+        candidateStatus.isClickable = !candidateRunning && candidatesLoaded && candidateFailures > 0
         for (option in options) candidateStrip.addView(VoiceStyle.button(this, option).apply {
             minWidth = 0; textSize = 15f; setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener { replaceSelected(option) }
@@ -621,7 +645,7 @@ class VoiceInputService : InputMethodService() {
         if (models.isEmpty()) return
         val epoch = ++candidateEpoch
         val request = generation
-        candidateRunning = true
+        candidateRunning = true; candidateFailures = 0
         renderCandidates()
         fun next(index: Int) {
             if (!active || epoch != candidateEpoch || request != generation || draftTarget == null) return
@@ -632,7 +656,9 @@ class VoiceInputService : InputMethodService() {
             pendingSpeech = SpeechEngine.recognize(this, models[index], audio) { result ->
                 if (!active || epoch != candidateEpoch || request != generation || draftTarget == null) return@recognize
                 ready = false
-                result.getOrNull()?.takeIf { it.isNotBlank() }?.let { if (it !in otherResults) otherResults.add(it) }
+                val text = result.getOrNull()?.takeIf { it.isNotBlank() }
+                if (text == null) candidateFailures++
+                else if (text !in otherResults) otherResults.add(text)
                 renderCandidates()
                 next(index + 1)
             }
