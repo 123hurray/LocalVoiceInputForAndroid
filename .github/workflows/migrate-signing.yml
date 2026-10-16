@@ -1,0 +1,31 @@
+name: Preserve existing signing identity
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: localvoice-debug-keystore-v1
+          fail-on-cache-miss: true
+      - name: Encrypt existing signing key for migration
+        run: |
+          test -s "$HOME/.android/debug.keystore"
+          mkdir -p encrypted-signing
+          keytool -exportcert -alias androiddebugkey -keystore "$HOME/.android/debug.keystore" -storepass android | sha256sum | cut -d ' ' -f1 > encrypted-signing/certificate.sha256
+          openssl cms -encrypt -binary -aes-256-cbc -in "$HOME/.android/debug.keystore" -outform DER -out encrypted-signing/keystore.cms .github/signing-transport.crt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-signing-migration
+          path: encrypted-signing/
+          retention-days: 1
