@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">LocalVoiceIME</string>
+    <string name="app_name">本地语音</string>
     <string name="ime_name">本地语音输入</string>
     <string name="voice_subtype_name">本地语音（中英文）</string>
     <string name="start_recording">开始录音</string>
@@ -26,24 +26,6 @@
     <string name="microphone_permission_description">LocalVoiceIME 只在设备本地读取麦克风音频，不保存或上传录音。</string>
     <string name="grant_permission">授予麦克风权限</string>
     <string name="permission_denied">未获得麦克风权限</string>
-    <string name="model_loading">SenseVoice 模型加载中…</string>
-    <string name="model_ready">SenseVoice Small INT8 + Silero VAD 已就绪</string>
-    <string name="model_error">模型加载失败：%1$s</string>
-    <string name="model_ready_without_vad">SenseVoice Small INT8 已就绪；VAD 已关闭</string>
-    <string name="settings_title">LocalVoiceIME 设置</string>
-    <string name="settings_recording_section">录音</string>
-    <string name="settings_auto_start">切换到语音输入后自动开始录音</string>
-    <string name="settings_max_duration">最长录音时间</string>
-    <string name="settings_vad_section">自动停止</string>
-    <string name="settings_vad_enabled">使用 Silero VAD 自动停止录音</string>
-    <string name="settings_silence_duration">说完后的静音等待时间</string>
-    <string name="settings_vad_sensitivity">VAD 灵敏度</string>
-    <string name="settings_sensitivity_low">低（适合嘈杂环境）</string>
-    <string name="settings_sensitivity_medium">中</string>
-    <string name="settings_sensitivity_high">高（适合小声说话）</string>
-    <string name="settings_input_section">输入行为</string>
-    <string name="settings_auto_return">识别成功后自动返回上一个输入法</string>
-    <string name="settings_model_section">模型信息</string>
-    <string name="settings_model_info">ASR：SenseVoice Small INT8\nVAD：Silero VAD v5（可关闭）\n采样率：16000 Hz\nABI：arm64-v8a\n运行模式：完全离线\n网络权限：无</string>
+    <string name="settings_title">本地语音设置</string>
     <string name="settings_seconds">%1$.1f 秒</string>
 </resources>

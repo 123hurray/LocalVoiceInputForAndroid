@@ -1,27 +1,5 @@
-# SenseVoice model assets
+# 模型文件
 
-The model binaries are intentionally excluded from Git because they are large.
+新版从设置页下载语音包，无需在构建时嵌入大模型。下载清单见 ../model-catalog.json。
 
-Required files:
-
-- `model.int8.onnx`
-- `tokens.txt`
-- `silero_vad_v5.onnx`
-
-Source: `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17`
-
-Download URL:
-
-`https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2`
-
-Archive SHA-256:
-
-`7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e`
-
-Silero VAD v5:
-
-`https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx`
-
-SHA-256:
-
-`6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396`
+为了兼容旧的开发安装，仍可在本目录放 model.int8.onnx 和 tokens.txt；文件不提交到 Git。新版使用按住说话，不再需要 Silero VAD。

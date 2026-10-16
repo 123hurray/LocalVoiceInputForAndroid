@@ -11,7 +11,7 @@ Data flow:
 ## Privacy invariants
 
 - Never upload, persist, log, or share microphone audio.
-- Do not add `INTERNET` or cloud ASR dependencies without explicit user approval.
+- INTERNET is authorized for explicit model downloads only. Never upload audio or add cloud ASR.
 - Keep audio at 16 kHz, mono, PCM 16-bit unless the model pipeline changes.
 - Stop and release `AudioRecord` when the input view finishes or the service dies.
 - Run recording and inference off the main thread.
@@ -23,7 +23,11 @@ Data flow:
   `silero_vad_v5.onnx` are local, ignored files. Never add them to Git.
 - The model archive URL and SHA-256 are documented in `README.md` and
   `app/src/main/assets/sense-voice/README.md`.
-- Current runtime: sherpa-onnx 1.13.4, SenseVoice Small INT8, ARM64 only.
+- Current runtime: sherpa-onnx 1.13.4, switchable offline models, ARM64 only.
+- Downloaded weights live in noBackupFilesDir; verify catalog SHA-256 and exact size before publishing.
+- All native engine operations are serialized by SpeechEngine. Do not close engines from IME lifecycle callbacks.
+- Interaction is hold-to-talk: no auto-start or silence endpointing. Keep user-facing copy nontechnical.
+- Quick start uses a user-stoppable foreground service; never keep the microphone open in the background.
 
 ## Development
 

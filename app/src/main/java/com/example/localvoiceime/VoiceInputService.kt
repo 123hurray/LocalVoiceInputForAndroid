@@ -3,7 +3,6 @@ package com.example.localvoiceime
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.graphics.Typeface
 import android.inputmethodservice.InputMethodService
 import android.media.AudioFormat
@@ -14,545 +13,255 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.concurrent.thread
+import kotlin.math.abs
 import kotlin.math.max
 
 class VoiceInputService : InputMethodService() {
-
-    private lateinit var statusView: TextView
-    private lateinit var modelStatusView: TextView
-    private lateinit var recordButton: Button
-    private lateinit var cancelButton: Button
-
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val pcmBuffer = PcmSampleBuffer(SAMPLE_RATE * MAX_RECORDING_SECONDS)
-    private val settingsStore by lazy { VoiceSettingsStore(this) }
-    private var activeSettings = VoiceSettings()
-
-    @Volatile
-    private var isRecording = false
-    private var startedAtMs = 0L
-    private var audioRecord: AudioRecord? = null
+    private lateinit var status: TextView
+    private lateinit var hint: TextView
+    private lateinit var hold: Button
+    private lateinit var bars: VoiceBarsView
+    private val main = Handler(Looper.getMainLooper())
+    private val pcm = PcmSampleBuffer(SAMPLE_RATE * 60)
+    private var settings = VoiceSettings()
+    private var recorder: AudioRecord? = null
     private var recordingThread: Thread? = null
-    @Volatile
-    private var senseVoiceAsr: SenseVoiceAsr? = null
-    @Volatile
-    private var vadDetector: SileroVadDetector? = null
-    @Volatile
-    private var isModelLoading = false
-    @Volatile
-    private var isVadLoading = false
-    @Volatile
-    private var vadLoadGeneration = 0
-    private var loadedVadSettings: Pair<Float, Float>? = null
-    @Volatile
-    private var isDestroyed = false
-    @Volatile
-    private var isRecognizing = false
-    private var isInputViewActive = false
-    private var autoStartConsumed = false
+    @Volatile private var recording = false
+    @Volatile private var level = 0f
+    private var recognizing = false
+    private var ready = false
+    private var active = false
+    private var destroyed = false
+    private var generation = 0
+    private var downY = 0f
+    private var cancelGesture = false
+    private var startedAt = 0L
 
     override fun onCreateInputView(): View {
-        val padding = (16 * resources.displayMetrics.density).toInt()
-
-        statusView = TextView(this).apply {
-            text = getString(R.string.recording_idle)
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-            setTypeface(typeface, Typeface.BOLD)
-        }
-
-        modelStatusView = TextView(this).apply {
-            text = getString(R.string.model_loading)
-            gravity = Gravity.CENTER
-            setTextColor(Color.DKGRAY)
-        }
-
-        recordButton = Button(this).apply {
-            text = getString(R.string.start_recording)
-            setOnClickListener {
-                if (isRecording) {
-                    stopRecording(shouldRecognize = true)
-                } else if (!isRecognizing) {
-                    startRecordingOrRequestPermission()
-                }
-            }
-        }
-
-        cancelButton = Button(this).apply {
-            text = getString(R.string.cancel_recording)
-            isEnabled = false
-            setOnClickListener { cancelRecording() }
-        }
-
-        val returnButton = Button(this).apply {
-            text = getString(R.string.return_to_fcitx)
-            setOnClickListener { returnToPreviousInputMethod(showPickerOnFailure = true) }
-        }
-
+        window.window?.navigationBarColor = VoiceStyle.background
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(padding, padding, padding, padding)
-            setBackgroundColor(Color.WHITE)
-            addView(modelStatusView, matchWidthWrapHeight())
-            addView(statusView, matchWidthWrapHeight())
-            addView(recordButton, matchWidthWrapHeight())
-            addView(cancelButton, matchWidthWrapHeight())
-            addView(returnButton, matchWidthWrapHeight())
-            ensureModelLoaded()
+            setPadding(dp(20), dp(12), dp(20), dp(18))
+            setBackgroundColor(VoiceStyle.background)
+            addView(LinearLayout(context).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                addView(TextView(context).apply {
+                    text = "本地语音"; textSize = 16f; setTextColor(VoiceStyle.text)
+                }, LinearLayout.LayoutParams(0, dp(44), 1f))
+                addView(VoiceStyle.button(context, "设置").apply {
+                    textSize = 14f
+                    setOnClickListener { openSettings() }
+                }, LinearLayout.LayoutParams(dp(76), dp(44)))
+            })
+            status = TextView(context).apply {
+                text = "准备中…"; textSize = 22f; gravity = Gravity.CENTER
+                setTextColor(VoiceStyle.text); setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, dp(20), 0, dp(8)); accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            addView(status)
+            bars = VoiceBarsView(context)
+            addView(bars, LinearLayout.LayoutParams(-1, dp(56)))
+            hint = TextView(context).apply {
+                text = "语音只在本机处理"; textSize = 13f; gravity = Gravity.CENTER; setTextColor(VoiceStyle.muted)
+                setPadding(0, 0, 0, dp(16))
+            }
+            addView(hint)
+            hold = VoiceStyle.button(context, "按住说话", primary = true).apply {
+                textSize = 18f
+                contentDescription = "按住说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
+                setOnTouchListener { view, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            if (!recognizing) {
+                                view.parent.requestDisallowInterceptTouchEvent(true)
+                                downY = event.rawY; cancelGesture = false
+                                startRecordingOrRequestPermission()
+                            }
+                        }
+                        MotionEvent.ACTION_MOVE -> if (recording) {
+                            cancelGesture = downY - event.rawY > dp(64)
+                            updateRecordingUi()
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            view.parent.requestDisallowInterceptTouchEvent(false)
+                            if (recording) stopRecording(!cancelGesture)
+                        }
+                        MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> stopRecording(false)
+                    }
+                    true
+                }
+                // Accessibility ACTION_CLICK bypasses touch; offer a start/stop equivalent.
+                setOnClickListener { if (recording) stopRecording(true) else startRecordingOrRequestPermission() }
+            }
+            addView(hold, LinearLayout.LayoutParams(-1, dp(76)))
+            addView(VoiceStyle.button(context, "返回键盘").apply {
+                setOnClickListener { stopRecording(false); returnToKeyboard(true) }
+            }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
         }
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        activeSettings = settingsStore.load()
-        if (!isInputViewActive) {
-            autoStartConsumed = false
+        if (recording) stopRecording(false)
+        active = true
+        val request = ++generation
+        settings = VoiceSettingsStore(this).load()
+        ready = false
+        if (!ModelRepository(this).isInstalled(settings.asrModel)) {
+            status.text = "先下载一个语音包"
+            hint.text = "点击右上角设置，准备好就能使用"
+            hold.isEnabled = true
+            return
         }
-        isInputViewActive = true
-        if (::recordButton.isInitialized && !isRecording) {
-            recordButton.text = getString(R.string.start_recording)
+        status.text = "准备中…"
+        hold.isEnabled = false
+        if (settings.keepResident) ReadyService.start(this)
+        SpeechEngine.prepare(this, settings.asrModel) { result ->
+            if (!destroyed && active && request == generation) {
+                ready = result.isSuccess
+                hold.isEnabled = true
+                status.text = if (ready) "按住，说出你想写的" else "暂时无法使用"
+                hint.text = if (ready) "松手输入 · 上滑取消" else "请到设置中检查语音包"
+            }
         }
-        ensureModelLoaded()
-        if (senseVoiceAsr != null) configureVadForActiveSettings()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        isInputViewActive = false
-        stopRecording(shouldRecognize = false)
+        active = false; generation++
+        stopRecording(false)
         super.onFinishInputView(finishingInput)
     }
-
     override fun onDestroy() {
-        isDestroyed = true
-        vadLoadGeneration += 1
-        stopRecording(shouldRecognize = false)
-        if (!isRecognizing) {
-            senseVoiceAsr?.close()
-            senseVoiceAsr = null
-        }
-        vadDetector?.close()
-        vadDetector = null
-        mainHandler.removeCallbacksAndMessages(null)
+        destroyed = true; active = false; generation++
+        stopRecording(false)
+        main.removeCallbacksAndMessages(null)
+        if (!VoiceSettingsStore(this).load().keepResident) SpeechEngine.release()
         super.onDestroy()
     }
 
-    private fun ensureModelLoaded() {
-        if (senseVoiceAsr != null || isModelLoading) return
-        isModelLoading = true
-        modelStatusView.text = getString(R.string.model_loading)
-        thread(name = "LocalVoiceIME-SenseVoice-Init") {
-            try {
-                val recognizer = SenseVoiceAsr(assets)
-                if (isDestroyed) {
-                    recognizer.close()
-                } else {
-                    senseVoiceAsr = recognizer
-                    mainHandler.post { configureVadForActiveSettings() }
-                }
-            } catch (error: Throwable) {
-                mainHandler.post {
-                    if (::modelStatusView.isInitialized) {
-                        modelStatusView.text = getString(
-                            R.string.model_error,
-                            error.message ?: error.javaClass.simpleName,
-                        )
-                    }
-                }
-            } finally {
-                isModelLoading = false
-            }
-        }
-    }
-
-    private fun configureVadForActiveSettings() {
-        if (isDestroyed || senseVoiceAsr == null) return
-        val settings = activeSettings
-        if (!settings.vadEnabled) {
-            vadLoadGeneration += 1
-            isVadLoading = false
-            vadDetector?.close()
-            vadDetector = null
-            loadedVadSettings = null
-            modelStatusView.text = getString(R.string.model_ready_without_vad)
-            maybeAutoStartRecording()
-            return
-        }
-
-        val requested = settings.silenceDurationSeconds to settings.vadThreshold
-        if (vadDetector != null && loadedVadSettings == requested) {
-            modelStatusView.text = getString(R.string.model_ready)
-            maybeAutoStartRecording()
-            return
-        }
-        if (isVadLoading) return
-
-        vadDetector?.close()
-        vadDetector = null
-        loadedVadSettings = null
-        isVadLoading = true
-        modelStatusView.text = getString(R.string.model_loading)
-        val generation = ++vadLoadGeneration
-        thread(name = "LocalVoiceIME-SileroVAD-Init") {
-            try {
-                val detector = SileroVadDetector(
-                    assetManager = assets,
-                    silenceDurationSeconds = requested.first,
-                    threshold = requested.second,
-                )
-                if (isDestroyed || generation != vadLoadGeneration) {
-                    detector.close()
-                } else {
-                    vadDetector = detector
-                    loadedVadSettings = requested
-                    mainHandler.post {
-                        if (::modelStatusView.isInitialized) {
-                            modelStatusView.text = getString(R.string.model_ready)
-                        }
-                        maybeAutoStartRecording()
-                    }
-                }
-            } catch (error: Throwable) {
-                if (!isDestroyed && generation == vadLoadGeneration) {
-                    mainHandler.post {
-                        modelStatusView.text = getString(
-                            R.string.model_error,
-                            "VAD：${error.message ?: error.javaClass.simpleName}",
-                        )
-                    }
-                }
-            } finally {
-                if (generation == vadLoadGeneration) isVadLoading = false
-            }
-        }
-    }
-
     private fun startRecordingOrRequestPermission() {
+        if (recognizing || recording || !active) return
+        if (!ready) { status.text = "请先在设置中准备语音包"; return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            startActivity(
-                Intent(this, MicrophonePermissionActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
+            startActivity(Intent(this, MicrophonePermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return
         }
-        startRecording()
-    }
-
-    private fun maybeAutoStartRecording() {
-        if (!isInputViewActive || autoStartConsumed || isRecording || isRecognizing) return
-        if (!activeSettings.autoStartRecording || senseVoiceAsr == null) return
-        if (activeSettings.vadEnabled && vadDetector == null) return
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            if (::statusView.isInitialized) {
-                statusView.text = getString(R.string.tap_to_grant_microphone)
-            }
-            return
+        val min = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (min <= 0) { status.text = "麦克风暂时不可用，请重试"; return }
+        val audio = try {
+            AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(min * 2, 4096))
+        } catch (_: Exception) { status.text = "麦克风暂时不可用，请重试"; return }
+        if (audio.state != AudioRecord.STATE_INITIALIZED) {
+            audio.release(); status.text = "麦克风暂时不可用，请重试"; return
         }
-        autoStartConsumed = true
-        startRecording()
-    }
-
-    private fun startRecording() {
-        if (isRecording || isRecognizing) return
-        if (senseVoiceAsr == null || (activeSettings.vadEnabled && vadDetector == null)) {
-            showRecognitionError(getString(R.string.model_not_ready))
-            ensureModelLoaded()
-            return
+        try { audio.startRecording() } catch (_: Exception) {
+            audio.release(); status.text = "无法录音，请检查麦克风权限"; return
         }
-
-        val minimumBufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        if (minimumBufferSize <= 0) {
-            showError("无法获得有效缓冲区：$minimumBufferSize")
-            return
-        }
-
-        val bufferSize = max(minimumBufferSize * 2, SAMPLE_RATE / 5 * BYTES_PER_SAMPLE)
-        val recorder = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize,
-            )
-        } catch (error: RuntimeException) {
-            showError(error.message ?: error.javaClass.simpleName)
-            return
-        }
-
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            recorder.release()
-            showError("AudioRecord 初始化失败")
-            return
-        }
-
-        try {
-            recorder.startRecording()
-        } catch (error: RuntimeException) {
-            recorder.release()
-            showError(error.message ?: error.javaClass.simpleName)
-            return
-        }
-
-        audioRecord = recorder
-        pcmBuffer.clear()
-        vadDetector?.reset()
-        startedAtMs = SystemClock.elapsedRealtime()
-        isRecording = true
-        recordButton.text = getString(R.string.stop_recording)
-        cancelButton.isEnabled = true
-        updateRecordingStatus()
-
-        recordingThread = thread(name = "LocalVoiceIME-AudioRecord") {
-            val samples = ShortArray(bufferSize / BYTES_PER_SAMPLE)
-            while (isRecording) {
-                val count = recorder.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
-                when {
-                    count > 0 -> {
-                        val appended = pcmBuffer.append(samples, count)
-                        val speechCompleted = try {
-                            activeSettings.vadEnabled && vadDetector?.accept(samples, count) == true
-                        } catch (error: Throwable) {
-                            mainHandler.post {
-                                showError("VAD：${error.message ?: error.javaClass.simpleName}")
-                            }
-                            break
-                        }
-                        if (speechCompleted) {
-                            isRecording = false
-                            mainHandler.post {
-                                if (::statusView.isInitialized) {
-                                    statusView.text = getString(R.string.vad_silence_detected)
-                                }
-                                stopRecording(shouldRecognize = true)
-                            }
-                            break
-                        } else if (
-                            appended < count ||
-                            pcmBuffer.size() >= SAMPLE_RATE * activeSettings.maxRecordingSeconds
-                        ) {
-                            isRecording = false
-                            mainHandler.post {
-                                if (::statusView.isInitialized) {
-                                    statusView.text = getString(
-                                        R.string.recording_limit_reached,
-                                        activeSettings.maxRecordingSeconds,
-                                    )
-                                }
-                                stopRecording(shouldRecognize = true)
-                            }
-                        }
-                    }
-                    count < 0 && isRecording -> {
-                        mainHandler.post { showError("AudioRecord.read 返回 $count") }
+        recorder = audio; pcm.clear(); recording = true
+        startedAt = SystemClock.elapsedRealtime(); cancelGesture = false
+        updateRecordingUi()
+        val request = generation
+        val limit = settings.asrModel.recordingLimitSeconds * SAMPLE_RATE
+        recordingThread = thread(name = "Voice-Record") {
+            val buffer = ShortArray(512)
+            while (recording) {
+                val n = audio.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                if (n > 0 && recording) {
+                    val allowed = minOf(n, (limit - pcm.size()).coerceAtLeast(0))
+                    pcm.append(buffer, allowed)
+                    level = (buffer.take(n).maxOf { abs(it.toInt()) } / 10000f).coerceIn(0.1f, 1f)
+                    if (pcm.size() >= limit) {
+                        main.post { if (active && request == generation) stopRecording(!cancelGesture) }
                         break
                     }
+                } else if (n < 0 && recording) {
+                    main.post {
+                        if (active && request == generation) { stopRecording(false); status.text = "录音中断，请重试" }
+                    }
+                    break
                 }
             }
         }
-        mainHandler.postDelayed(statusUpdater, STATUS_UPDATE_INTERVAL_MS)
+        main.post(ticker)
     }
 
-    private fun stopRecording(shouldRecognize: Boolean) {
-        if (!isRecording && audioRecord == null) return
-
-        isRecording = false
-        mainHandler.removeCallbacks(statusUpdater)
-        val recorder = audioRecord
-        audioRecord = null
-        try {
-            recorder?.stop()
-        } catch (_: IllegalStateException) {
-            // The recorder may already be stopped after an input-view lifecycle change.
-        }
-        recordingThread?.let { worker ->
-            if (worker !== Thread.currentThread()) worker.join(RECORDING_THREAD_JOIN_MS)
-        }
+    private fun stopRecording(submit: Boolean) {
+        val audio = recorder ?: return
+        recorder = null; recording = false
+        main.removeCallbacks(ticker)
+        runCatching { audio.stop() }
+        recordingThread?.join(500)
         recordingThread = null
-        recorder?.release()
-        vadDetector?.reset()
-
-        if (::recordButton.isInitialized) {
-            recordButton.text = getString(R.string.start_recording)
+        audio.release()
+        bars.recording = false; bars.level = 0f; bars.invalidate()
+        hold.text = "按住说话"; hold.background = VoiceStyle.rounded(this, VoiceStyle.accent)
+        if (!submit) {
+            pcm.clear(); status.text = "已取消"; hint.text = "按住说话 · 松手输入"; return
         }
-        if (::cancelButton.isInitialized) {
-            cancelButton.isEnabled = false
-        }
-        if (::statusView.isInitialized && startedAtMs > 0L) {
-            statusView.text = getString(
-                R.string.recording_stopped,
-                elapsedSeconds(),
-                pcmBuffer.size(),
-            )
-        }
-
-        if (shouldRecognize) {
-            recognizeBufferedAudio()
-        } else {
-            pcmBuffer.clear()
-        }
-    }
-
-    private fun cancelRecording() {
-        if (!isRecording && audioRecord == null) return
-        stopRecording(shouldRecognize = false)
-        if (::statusView.isInitialized) {
-            statusView.text = getString(R.string.recording_cancelled)
-        }
-    }
-
-    private fun recognizeBufferedAudio() {
-        val recognizer = senseVoiceAsr
-        val samples = pcmBuffer.toNormalizedFloatArray()
-        pcmBuffer.clear()
-        if (recognizer == null) {
-            showRecognitionError(getString(R.string.model_not_ready))
-            return
-        }
-        if (samples.isEmpty()) {
-            statusView.text = getString(R.string.recognition_empty)
-            return
-        }
-
-        val targetConnection = currentInputConnection
-        isRecognizing = true
-        recordButton.isEnabled = false
-        cancelButton.isEnabled = false
-        statusView.text = getString(
-            R.string.recognizing,
-            samples.size.toFloat() / SAMPLE_RATE,
-        )
-
-        thread(name = "LocalVoiceIME-SenseVoice-Decode") {
-            try {
-                val text = recognizer.recognize(samples)
-                if (!isDestroyed) {
-                    mainHandler.post { handleRecognitionResult(text, targetConnection) }
+        val samples = pcm.toNormalizedFloatArray(); pcm.clear()
+        if (samples.size < SAMPLE_RATE / 4) { status.text = "说话时间太短，请重试"; return }
+        recognizing = true; hold.isEnabled = false
+        status.text = "正在识别…"; hint.text = "稍等片刻"
+        val target = currentInputConnection
+        val request = generation
+        SpeechEngine.recognize(this, settings.asrModel, samples) { result ->
+            recognizing = false
+            if (destroyed || !active || request != generation) return@recognize
+            hold.isEnabled = true
+            val text = result.getOrNull().orEmpty().trim()
+            when {
+                result.isFailure -> { status.text = "这次没识别成功"; hint.text = "请再试一次" }
+                text.isBlank() -> { status.text = "没有听清，请再说一次"; hint.text = "按住说话 · 松手输入" }
+                target == null || currentInputConnection !== target -> {
+                    status.text = "输入位置已变化"; hint.text = "请在要输入的位置重新说话"
                 }
-            } catch (error: Throwable) {
-                if (!isDestroyed) {
-                    mainHandler.post {
-                        showRecognitionError(error.message ?: error.javaClass.simpleName)
-                    }
+                target.commitText(text, 1) -> {
+                    status.text = "已输入"; hint.text = "还可以继续说"
+                    if (settings.autoReturnToPreviousIme) main.postDelayed({
+                        if (!destroyed && active && request == generation && currentInputConnection === target) returnToKeyboard(false)
+                    }, 150)
                 }
-            } finally {
-                isRecognizing = false
-                if (isDestroyed) {
-                    recognizer.close()
-                    senseVoiceAsr = null
-                } else {
-                    mainHandler.post {
-                        if (::recordButton.isInitialized) recordButton.isEnabled = true
-                    }
-                }
+                else -> { status.text = "无法输入到这里"; hint.text = "请选择输入框后重试" }
             }
         }
     }
 
-    private fun handleRecognitionResult(text: String, targetConnection: InputConnection?) {
-        if (text.isBlank()) {
-            statusView.text = getString(R.string.recognition_empty)
-            return
-        }
-        if (targetConnection == null || currentInputConnection !== targetConnection) {
-            statusView.text = getString(R.string.input_target_changed, text)
-            return
-        }
-        if (targetConnection.commitText(text, 1)) {
-            statusView.text = getString(R.string.recognition_result, text)
-            if (activeSettings.autoReturnToPreviousIme) {
-                mainHandler.postDelayed(
-                    { returnToPreviousInputMethod(showPickerOnFailure = false) },
-                    RETURN_TO_PREVIOUS_IME_DELAY_MS,
-                )
-            }
-        } else {
-            statusView.text = getString(R.string.recognition_error, "无法提交识别文字")
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun returnToPreviousInputMethod(showPickerOnFailure: Boolean) {
-        val switched = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            switchToPreviousInputMethod()
-        } else {
-            val token = window.window?.attributes?.token
-            token != null && getSystemService(InputMethodManager::class.java)
-                .switchToLastInputMethod(token)
-        }
-
-        if (!switched && showPickerOnFailure) {
-            if (::statusView.isInitialized) {
-                statusView.text = getString(R.string.return_to_previous_failed)
-            }
-            getSystemService(InputMethodManager::class.java).showInputMethodPicker()
-        }
-    }
-
-    private val statusUpdater = object : Runnable {
+    private val ticker = object : Runnable {
         override fun run() {
-            if (!isRecording) return
-            updateRecordingStatus()
-            mainHandler.postDelayed(this, STATUS_UPDATE_INTERVAL_MS)
+            if (!recording) return
+            updateRecordingUi()
+            main.postDelayed(this, 80)
         }
     }
-
-    private fun updateRecordingStatus() {
-        if (::statusView.isInitialized) {
-            statusView.text = getString(
-                if (activeSettings.vadEnabled) {
-                    R.string.recording_active
-                } else {
-                    R.string.recording_active_without_vad
-                },
-                elapsedSeconds(),
-                pcmBuffer.size(),
-                activeSettings.silenceDurationSeconds,
-            )
+    private fun updateRecordingUi() {
+        val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1000
+        status.text = if (cancelGesture) "松手取消" else "正在听你说…"
+        hint.text = if (cancelGesture) "移回按钮，继续说话" else "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}  ·  上滑取消"
+        hold.text = if (cancelGesture) "松手取消" else "松手输入"
+        hold.background = VoiceStyle.rounded(this, if (cancelGesture) VoiceStyle.danger else VoiceStyle.accent)
+        bars.recording = true; bars.level = level; bars.cancelling = cancelGesture; bars.invalidate()
+    }
+    private fun openSettings() {
+        stopRecording(false)
+        startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+    @Suppress("DEPRECATION")
+    private fun returnToKeyboard(showPicker: Boolean) {
+        val switched = if (Build.VERSION.SDK_INT >= 28) switchToPreviousInputMethod() else {
+            val token = window.window?.attributes?.token
+            token != null && getSystemService(InputMethodManager::class.java).switchToLastInputMethod(token)
         }
+        if (!switched && showPicker) getSystemService(InputMethodManager::class.java).showInputMethodPicker()
     }
-
-    private fun showError(message: String) {
-        stopRecording(shouldRecognize = false)
-        if (::statusView.isInitialized) {
-            statusView.text = getString(R.string.recording_error, message)
-        }
-    }
-
-    private fun showRecognitionError(message: String) {
-        if (::statusView.isInitialized) {
-            statusView.text = getString(R.string.recognition_error, message)
-        }
-    }
-
-    private fun elapsedSeconds(): Float =
-        (SystemClock.elapsedRealtime() - startedAtMs).coerceAtLeast(0L) / 1000f
-
-    private fun matchWidthWrapHeight() = LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT,
-    )
-
-    companion object {
-        private const val SAMPLE_RATE = 16_000
-        private const val BYTES_PER_SAMPLE = 2
-        private const val STATUS_UPDATE_INTERVAL_MS = 100L
-        private const val RECORDING_THREAD_JOIN_MS = 500L
-        private const val MAX_RECORDING_SECONDS = 60
-        private const val MAX_BUFFERED_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
-        private const val RETURN_TO_PREVIOUS_IME_DELAY_MS = 200L
-    }
+    private fun dp(value: Int) = VoiceStyle.dp(this, value)
+    companion object { private const val SAMPLE_RATE = 16_000 }
 }

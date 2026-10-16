@@ -1,161 +1,188 @@
 package com.example.localvoiceime
 
+import android.Manifest
 import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
-import android.widget.ArrayAdapter
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
 
 class SettingsActivity : Activity() {
-
     private lateinit var store: VoiceSettingsStore
-    private lateinit var autoStartSwitch: Switch
-    private lateinit var vadSwitch: Switch
-    private lateinit var silenceSpinner: Spinner
-    private lateinit var sensitivitySpinner: Spinner
-    private lateinit var maxDurationSpinner: Spinner
-    private lateinit var autoReturnSwitch: Switch
-
-    private val silenceValues = floatArrayOf(0.6f, 0.8f, 1.0f, 1.2f, 1.5f, 2.0f)
-    private val thresholdValues = floatArrayOf(0.6f, 0.5f, 0.35f)
-    private val maxDurationValues = intArrayOf(15, 30, 60)
+    private lateinit var repository: ModelRepository
+    private lateinit var selectedLabel: TextView
+    private lateinit var quickStart: Switch
+    private lateinit var autoReturn: Switch
+    private val rows = mutableMapOf<AsrModel, Triple<TextView, Button, Button>>()
+    private val handler = Handler(Looper.getMainLooper())
+    private var selected = AsrModel.SENSE_VOICE
+    private var preparedModel: AsrModel? = null
+    private var initialising = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = getString(R.string.settings_title)
+        window.statusBarColor = VoiceStyle.background
+        window.navigationBarColor = VoiceStyle.background
         store = VoiceSettingsStore(this)
-        setContentView(createContentView())
-        showSettings(store.load())
-        installChangeListeners()
+        repository = ModelRepository(this)
+        val settings = store.load()
+        selected = settings.asrModel
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(VoiceStyle.background)
+            setPadding(dp(22), dp(28), dp(22), dp(28))
+        }
+        page.addView(label("本地语音", 28f, VoiceStyle.text))
+        page.addView(label("按住说话，松手输入", 16f, VoiceStyle.muted))
+        page.addView(label("语音始终在本机处理，只有下载语音包时使用网络。", 14f, VoiceStyle.muted))
+        page.addView(section("开始使用"))
+        page.addView(action("启用本地语音键盘") {
+            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        })
+        page.addView(action("允许使用麦克风") {
+            startActivity(Intent(this, MicrophonePermissionActivity::class.java))
+        })
+        page.addView(label("启用后，从当前键盘切换到「本地语音」。按住按钮说话，中途停顿不会结束；上滑可取消。", 14f, VoiceStyle.muted))
+
+        page.addView(section("使用习惯"))
+        quickStart = Switch(this).apply {
+            text = "快速启动"; textSize = 17f; setTextColor(VoiceStyle.text)
+            minHeight = dp(56); isChecked = settings.keepResident
+            setOnCheckedChangeListener { _, enabled ->
+                if (!initialising) {
+                    saveSettings()
+                    if (enabled) { askNotificationPermission(); prepareSelected() }
+                    else { preparedModel = null; ReadyService.stop(this@SettingsActivity) }
+                }
+            }
+        }
+        page.addView(quickStart)
+        page.addView(label("在后台保持就绪，下次打开更快。开启时会显示常驻通知，可随时关闭。", 14f, VoiceStyle.muted))
+        autoReturn = Switch(this).apply {
+            text = "输入后返回原键盘"; textSize = 17f; setTextColor(VoiceStyle.text)
+            minHeight = dp(56); isChecked = settings.autoReturnToPreviousIme
+            setOnCheckedChangeListener { _, _ -> if (!initialising) saveSettings() }
+        }
+        page.addView(autoReturn)
+        page.addView(section("语音包"))
+        selectedLabel = label("", 15f, VoiceStyle.accent)
+        page.addView(selectedLabel)
+        page.addView(label("先下载，再选择使用。下载时请保持此页打开；中断后可以继续。", 14f, VoiceStyle.muted))
+        for (model in AsrModel.entries) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                background = VoiceStyle.rounded(context, VoiceStyle.surface)
+            }
+            card.addView(label(model.label, 18f, VoiceStyle.text))
+            card.addView(label(description(model), 13f, VoiceStyle.muted))
+            val progress = label("", 14f, VoiceStyle.muted)
+            card.addView(progress)
+            val buttons = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            val download = VoiceStyle.button(this, "下载").apply {
+                setOnClickListener {
+                    if (ModelDownloads.state.let { it.running && it.model == model }) ModelDownloads.cancel()
+                    else ModelDownloads.start(this@SettingsActivity, model)
+                    renderModels()
+                }
+            }
+            val use = VoiceStyle.button(this, "使用", primary = true).apply {
+                setOnClickListener {
+                    if (repository.isInstalled(model)) {
+                        selected = model; saveSettings(); preparedModel = null
+                        prepareSelected(); renderModels()
+                    }
+                }
+            }
+            buttons.addView(download, LinearLayout.LayoutParams(0, dp(50), 1f))
+            buttons.addView(use, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(10) })
+            card.addView(buttons)
+            rows[model] = Triple(progress, download, use)
+            page.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+        }
+        page.addView(label("首次准备需要一点时间。快速启动可减少之后的等待；系统清理后台后需要重新准备。", 13f, VoiceStyle.muted))
+        setContentView(ScrollView(this).apply { setBackgroundColor(VoiceStyle.background); addView(page) })
+        initialising = false
+        renderModels()
     }
 
-    private fun createContentView(): ScrollView {
-        val padding = (20 * resources.displayMetrics.density).toInt()
-        return ScrollView(this).apply {
-            addView(
-                LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(padding, padding, padding, padding)
-
-                    addView(sectionTitle(getString(R.string.settings_recording_section)))
-                    autoStartSwitch = settingSwitch(getString(R.string.settings_auto_start))
-                    addView(autoStartSwitch)
-                    addView(fieldLabel(getString(R.string.settings_max_duration)))
-                    maxDurationSpinner = settingSpinner(
-                        maxDurationValues.map { getString(R.string.settings_seconds, it.toFloat()) },
-                    )
-                    addView(maxDurationSpinner)
-
-                    addView(sectionTitle(getString(R.string.settings_vad_section)))
-                    vadSwitch = settingSwitch(getString(R.string.settings_vad_enabled))
-                    addView(vadSwitch)
-                    addView(fieldLabel(getString(R.string.settings_silence_duration)))
-                    silenceSpinner = settingSpinner(
-                        silenceValues.map { getString(R.string.settings_seconds, it) },
-                    )
-                    addView(silenceSpinner)
-                    addView(fieldLabel(getString(R.string.settings_vad_sensitivity)))
-                    sensitivitySpinner = settingSpinner(
-                        listOf(
-                            getString(R.string.settings_sensitivity_low),
-                            getString(R.string.settings_sensitivity_medium),
-                            getString(R.string.settings_sensitivity_high),
-                        ),
-                    )
-                    addView(sensitivitySpinner)
-
-                    addView(sectionTitle(getString(R.string.settings_input_section)))
-                    autoReturnSwitch = settingSwitch(getString(R.string.settings_auto_return))
-                    addView(autoReturnSwitch)
-
-                    addView(sectionTitle(getString(R.string.settings_model_section)))
-                    addView(
-                        TextView(context).apply {
-                            text = getString(R.string.settings_model_info)
-                            textSize = 15f
-                        },
-                    )
-                },
-            )
+    override fun onResume() {
+        super.onResume()
+        val settings = store.load()
+        selected = settings.asrModel
+        initialising = true
+        quickStart.isChecked = settings.keepResident
+        initialising = false
+        preparedModel = null
+        handler.post(refresh)
+    }
+    override fun onPause() { handler.removeCallbacks(refresh); super.onPause() }
+    private val refresh = object : Runnable {
+        override fun run() { renderModels(); prepareSelected(); handler.postDelayed(this, 600) }
+    }
+    private fun prepareSelected() {
+        if (!quickStart.isChecked || !repository.isInstalled(selected) || preparedModel == selected) return
+        preparedModel = selected
+        if (quickStart.isChecked) {
+            askNotificationPermission()
+            ReadyService.start(this)
+        }
+        SpeechEngine.prepare(this, selected) { /* Shared engine remains ready for the IME. */ }
+    }
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            val prefs = getSharedPreferences("onboarding", MODE_PRIVATE)
+            if (!prefs.getBoolean("notification_asked", false)) {
+                prefs.edit().putBoolean("notification_asked", true).apply()
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 20)
+            }
         }
     }
-
-    private fun showSettings(settings: VoiceSettings) {
-        autoStartSwitch.isChecked = settings.autoStartRecording
-        vadSwitch.isChecked = settings.vadEnabled
-        silenceSpinner.setSelection(nearestIndex(silenceValues, settings.silenceDurationSeconds))
-        sensitivitySpinner.setSelection(nearestIndex(thresholdValues, settings.vadThreshold))
-        maxDurationSpinner.setSelection(
-            maxDurationValues.indices.minBy { index ->
-                kotlin.math.abs(maxDurationValues[index] - settings.maxRecordingSeconds)
-            },
-        )
-        autoReturnSwitch.isChecked = settings.autoReturnToPreviousIme
-        setVadControlsEnabled(settings.vadEnabled)
-    }
-
-    private fun installChangeListeners() {
-        val save = { _: Any? -> saveSettings() }
-        autoStartSwitch.setOnCheckedChangeListener { _, _ -> save(null) }
-        vadSwitch.setOnCheckedChangeListener { _, enabled ->
-            setVadControlsEnabled(enabled)
-            save(null)
+    private fun saveSettings() = store.save(VoiceSettings(selected, quickStart.isChecked, autoReturn.isChecked))
+    private fun renderModels() {
+        selectedLabel.text = "当前：${selected.label}"
+        val state = ModelDownloads.state
+        for ((model, row) in rows) {
+            val installed = repository.isInstalled(model)
+            val (progress, download, use) = row
+            val active = state.model == model
+            progress.text = when {
+                installed -> "已下载"
+                active && state.running -> "${state.message} · ${(state.bytes * 100 / state.total.coerceAtLeast(1))}%"
+                active -> state.message
+                else -> "约 ${repository.spec(model).size / 1024 / 1024} MB"
+            }
+            download.text = if (active && state.running) "暂停" else "下载"
+            download.isEnabled = !installed && (!state.running || active)
+            download.alpha = if (download.isEnabled) 1f else 0.45f
+            use.text = if (selected == model) "正在使用" else "使用"
+            use.isEnabled = installed && selected != model
+            use.alpha = if (installed) 1f else 0.4f
         }
-        autoReturnSwitch.setOnCheckedChangeListener { _, _ -> save(null) }
-        silenceSpinner.onItemSelectedListener = SimpleItemSelectedListener { save(null) }
-        sensitivitySpinner.onItemSelectedListener = SimpleItemSelectedListener { save(null) }
-        maxDurationSpinner.onItemSelectedListener = SimpleItemSelectedListener { save(null) }
     }
-
-    private fun saveSettings() {
-        store.save(
-            VoiceSettings(
-                autoStartRecording = autoStartSwitch.isChecked,
-                vadEnabled = vadSwitch.isChecked,
-                silenceDurationSeconds = silenceValues[silenceSpinner.selectedItemPosition],
-                vadThreshold = thresholdValues[sensitivitySpinner.selectedItemPosition],
-                maxRecordingSeconds = maxDurationValues[maxDurationSpinner.selectedItemPosition],
-                autoReturnToPreviousIme = autoReturnSwitch.isChecked,
-            ),
-        )
+    private fun description(model: AsrModel) = when (model) {
+        AsrModel.SENSE_VOICE -> "推荐用于日常中文和中英混合输入。"
+        AsrModel.PARAFORMER -> "中英混合输入的另一选择，可对比常用词的识别效果。"
+        AsrModel.WHISPER_TINY -> "下载体积更小，适合短句；单次最多 25 秒。混合输入效果需试用比较。"
+        AsrModel.WHISPER_BASE -> "另一款多语言语音包；单次最多 25 秒。可与轻量版比较效果。"
     }
-
-    private fun setVadControlsEnabled(enabled: Boolean) {
-        silenceSpinner.isEnabled = enabled
-        sensitivitySpinner.isEnabled = enabled
+    private fun label(value: String, size: Float, color: Int) = TextView(this).apply {
+        text = value; textSize = size; setTextColor(color)
+        setPadding(0, dp(5), 0, dp(7))
     }
-
-    private fun sectionTitle(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 20f
-        gravity = Gravity.START
-        setPadding(0, (16 * resources.displayMetrics.density).toInt(), 0, 8)
+    private fun section(value: String) = label(value, 20f, VoiceStyle.text).apply { setPadding(0, dp(26), 0, dp(8)) }
+    private fun action(value: String, action: () -> Unit) = VoiceStyle.button(this, value).apply {
+        setOnClickListener { action() }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(10) }
     }
-
-    private fun fieldLabel(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 15f
-        setPadding(0, 12, 0, 4)
-    }
-
-    private fun settingSwitch(text: String) = Switch(this).apply {
-        this.text = text
-        textSize = 16f
-        setPadding(0, 10, 0, 10)
-    }
-
-    private fun settingSpinner(labels: List<String>) = Spinner(this).apply {
-        adapter = ArrayAdapter(
-            this@SettingsActivity,
-            android.R.layout.simple_spinner_dropdown_item,
-            labels,
-        )
-    }
-
-    private fun nearestIndex(values: FloatArray, target: Float): Int =
-        values.indices.minBy { index -> kotlin.math.abs(values[index] - target) }
+    private fun dp(value: Int) = VoiceStyle.dp(this, value)
 }

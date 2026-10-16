@@ -1,142 +1,64 @@
-# LocalVoiceIME
+# 本地语音 · Android
 
-完全离线的 Android 语音输入法，配合
-[Fcitx5 for Android](https://github.com/fcitx5-android/fcitx5-android) 使用。
-
-点击 Fcitx5 的麦克风后，系统切换到 LocalVoiceIME。录音结束后，应用在手机本地
-使用 sherpa-onnx + SenseVoice Small INT8 识别语音，提交文字并自动切回 Fcitx5。
-
-> 音频只在内存中处理，不保存、不上传；应用未申请网络权限。
-
-## 功能
-
-- 16 kHz、单声道、PCM 16-bit 本地录音
-- SenseVoice Small INT8 中英文混合识别
-- 后台推理，不阻塞输入法界面
-- 识别结果通过 `commitText()` 输入当前文本框
-- 识别完成后自动返回 Fcitx5，也可手动返回
-- 单次录音最长 60 秒
-- Silero VAD 检测停顿并自动结束录音
-- 输入目标变化保护
-- Android 8.0+，当前仅打包 `arm64-v8a`
-
-```mermaid
-flowchart LR
-    A["Fcitx5 麦克风"] --> B["AudioRecord"]
-    B --> C["SenseVoice 本地推理"]
-    C --> D["commitText"]
-    D --> E["返回 Fcitx5"]
-```
-
-## 准备模型
-
-模型约 228 MB，不提交到 Git。下载官方模型包：
-
-```bash
-curl -L --fail -o /tmp/sensevoice-int8.tar.bz2 \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
-
-shasum -a 256 /tmp/sensevoice-int8.tar.bz2
-```
-
-预期 SHA-256：
-
-```text
-7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e
-```
-
-解压模型和词表：
-
-```bash
-mkdir -p app/src/main/assets/sense-voice
-tar -xjf /tmp/sensevoice-int8.tar.bz2 \
-  -C app/src/main/assets/sense-voice \
-  --strip-components=1 \
-  sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx \
-  sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt
-```
-
-下载 Silero VAD v5：
-
-```bash
-curl -L --fail \
-  -o app/src/main/assets/sense-voice/silero_vad_v5.onnx \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad_v5.onnx"
-```
-
-VAD 模型 SHA-256：
-
-```text
-6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396
-```
-
-## 构建与安装
-
-```bash
-./gradlew :app:testDebugUnitTest :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-macOS 如果找不到 Java，可使用 Android Studio 内置 JBR：
-
-```bash
-JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-  ./gradlew :app:testDebugUnitTest :app:assembleDebug
-```
-
-安装后，在 Android 的“管理屏幕键盘”中启用“本地语音输入”。它是输入法服务，
-没有普通桌面入口。
+配合 Fcitx5 for Android 使用的本地语音输入键盘。按住说话，松手输入，上滑取消；中途停顿不会结束录音。
 
 ## 使用
 
-1. 将 Fcitx5 设为当前输入法。
-2. 点击 Fcitx5 工具栏的麦克风。
-3. 等待模型就绪；LocalVoiceIME 会自动开始录音。
-4. 直接说话，说完停顿约 1 秒。
-5. VAD 自动结束录音，识别文字自动输入，随后返回 Fcitx5。
+1. 安装 GitHub Actions 构建的 `LocalVoiceInput-arm64.apk`（Android 8.0+，ARM64）。
+2. 打开「本地语音」，下载一个语音包，推荐先使用 SenseVoice。
+3. 点击「启用本地语音键盘」和「允许使用麦克风」。
+4. 从 Fcitx5 的语音入口进入，或使用系统键盘切换器切到「本地语音」。
+5. 按住按钮说话，松开后识别并输入。上滑再松手会取消。
 
-也可以手动停止或取消本次录音。
+主界面采用暗色风格，只保留录音状态、操作提示、设置和返回键盘。
 
-首次使用会请求麦克风权限。
+## 语音包
 
-## 设置
+| 名称 | 下载量（约） | 定位 |
+| --- | --- | --- |
+| SenseVoice Small INT8 | 228 MiB | 默认，中英混合输入 |
+| Paraformer INT8 | 213 MiB | 中英输入对照 |
+| Whisper Tiny 多语言 INT8 | 99 MiB | 轻量实验选项 |
+| Whisper Base 多语言 INT8 | 153 MiB | 多语言实验选项 |
 
-安装后可从桌面打开 LocalVoiceIME 设置：
+下载只获取 INT8 权重和配套词表，不打包浮点权重。使用固定版本和逐文件 SHA-256 校验，下载完整并校验成功后才显示可使用。支持暂停与续传；被系统结束后再次点击下载可继续。下载时请保持设置页打开。
 
-- 自动开始录音
-- 最长录音时间
-- 启用或关闭 Silero VAD
-- VAD 静音等待时间和灵敏度
-- 识别成功后自动返回上一个输入法
+Whisper 是多语言模型，不能保证句内中英混说效果优于 SenseVoice。它目前单次最多录音 25 秒，其他模型最多 60 秒；达到上限会自动识别。当前未实现长音频分段拼接或标点恢复模型，Paraformer 的标点/数字格式可能与 SenseVoice 不同。
 
-关闭 VAD 后不会读取或初始化 VAD 模型，录音需手动停止。
+## 快速启动
 
-## 隐私与限制
+默认开启。语音包下载后会提前加载，共享识别器在输入法关闭时不主动卸载。用户可通过设置或常驻通知关闭快速启动。
 
-- 仅申请 `RECORD_AUDIO`，不申请 `INTERNET`。
-- PCM 只暂存在进程内存，输入法隐藏时停止录音并释放资源。
-- SenseVoice 是非流式模型，停止录音后才开始识别。
-- APK 包含模型和原生库，Debug APK 约 264 MB。
-- 当前只支持 ARM64 真机，不支持 x86 模拟器。
-- Fcitx5 的空格触摸事件无法由独立输入法接收，因此不支持按住空格录音。
+前台服务只保留模型，不打开麦克风、不持有唤醒锁。Android 或厂商系统仍可能回收进程，回收后首次使用需重新准备。关闭快速启动后，不再启动保活服务，输入法服务销毁时释放模型。
 
-## 路线图
+## 隐私
 
-- [x] Voice IME 与 Fcitx5 集成
-- [x] AudioRecord
-- [x] sherpa-onnx + SenseVoice Small INT8
-- [x] 后台识别、提交文字、自动返回 Fcitx5
-- [ ] OpenCC 简体转换
-- [ ] 中英文专业术语修正
-- [ ] Silero VAD
-- [ ] 设置界面与 Release APK
+- 音频只在内存中处理，不保存、不上传、不记录日志。
+- INTERNET 仅用于用户主动下载语音包，识别过程完全离线。
+- 下载模型存放在应用私有、不备份目录，无需文件访问权限。
+- 仅在按住说话或主动无障碍点按录音期间使用麦克风；离开输入法立即停止。
+- 使用会话与输入位置检查，过期结果不提交到新输入框。
 
-## 第三方项目与许可证
+## 构建
+
+JDK 17，Android SDK 与版本见 `.github/workflows/android.yml`。
+
+```bash
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+```
+
+不需要预先下载模型即可构建。推送 main 或手动运行 **Build Android APK**，成功后在该次 Actions 页下载 `LocalVoiceInput-arm64` artifact，解压得到可安装的 Debug APK。相同仓库连续构建使用固定 CI Debug 签名，以便覆盖安装；首次安装如遇签名不一致，需要先卸载旧开发版本。
+
+模型切换、常驻内存和麦克风行为需要在 ARM64 真机上验证；CI 单元测试与构建不能替代真机效果和耗时测试。
+
+## 项目与模型
+
+基于 Mesong21/LocalVoiceInputForAndroid；推理使用 sherpa-onnx。模型目录和校验信息见 `app/src/main/assets/model-catalog.json`，均来自 sherpa-onnx 维护者提供的 Hugging Face 导出。
 
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 - [SenseVoice](https://github.com/FunAudioLLM/SenseVoice)
+- [Paraformer](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-paraformer/paraformer-models.html)
+- [Whisper](https://github.com/openai/whisper)
 - [Fcitx5 for Android](https://github.com/fcitx5-android/fcitx5-android)
-- [RIME](https://rime.im/)
 
-仓库发布前请添加项目自己的 `LICENSE`，并确认模型和所有第三方组件的许可证及
-再分发要求。
+代码与模型的许可证及再分发要求需分别遵守。

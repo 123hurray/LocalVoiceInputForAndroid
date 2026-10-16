@@ -19,3 +19,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+/app/src/main/assets/paraformer-zh/
+/app/src/main/assets/whisper-tiny/
+/app/src/main/assets/whisper-base/

@@ -22,11 +22,13 @@ class MicrophonePermissionActivity : Activity() {
         val padding = (24 * resources.displayMetrics.density).toInt()
         setContentView(
             LinearLayout(this).apply {
+                setBackgroundColor(VoiceStyle.background)
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 setPadding(padding, padding, padding, padding)
                 addView(
                     TextView(context).apply {
+                        setTextColor(VoiceStyle.text)
                         text = getString(R.string.microphone_permission_title)
                         textSize = 20f
                         gravity = Gravity.CENTER
@@ -35,6 +37,7 @@ class MicrophonePermissionActivity : Activity() {
                 )
                 addView(
                     TextView(context).apply {
+                        setTextColor(VoiceStyle.muted)
                         text = getString(R.string.microphone_permission_description)
                         gravity = Gravity.CENTER
                     },
