@@ -105,7 +105,7 @@ class VoiceInputService : InputMethodService() {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 setPadding(dp(20), 0, dp(20), 0)
-                setBackgroundColor(VoiceStyle.surface)
+                setBackgroundColor(VoiceStyle.background)
                 contentDescription = "按住此区域说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 setOnTouchListener { view, event ->
@@ -135,7 +135,7 @@ class VoiceInputService : InputMethodService() {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             speechArea.addView(bars, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(12) })
-            hold = VoiceStyle.button(context, "按住说话", primary = true).apply {
+            hold = VoiceStyle.button(context, "按住说话").apply {
                 textSize = 16f
                 isClickable = false
                 isFocusable = false
@@ -258,7 +258,7 @@ class VoiceInputService : InputMethodService() {
         recordingThread = null
         audio.release()
         bars.recording = false; bars.level = 0f; bars.invalidate()
-        hold.text = "按住说话"; hold.background = VoiceStyle.rounded(this, VoiceStyle.accent)
+        hold.text = "按住说话"; hold.background = VoiceStyle.rounded(this, VoiceStyle.surface)
         if (!submit) {
             pcm.clear(); status.text = "已取消"; hint.text = "按住说话 · 松手输入"; return
         }

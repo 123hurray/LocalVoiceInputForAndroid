@@ -13,7 +13,7 @@ class VoiceBarsView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        paint.color = if (cancelling) VoiceStyle.danger else VoiceStyle.accent
+        paint.color = if (cancelling) VoiceStyle.danger else if (recording) VoiceStyle.accent else VoiceStyle.muted
         val gap = VoiceStyle.dp(context, 11).toFloat()
         val thickness = VoiceStyle.dp(context, 4).toFloat()
         val phase = android.os.SystemClock.uptimeMillis() / 140.0
