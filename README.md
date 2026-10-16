@@ -53,7 +53,9 @@ JDK 17，Android SDK 与版本见 `.github/workflows/android.yml`。
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
-不需要预先下载模型即可构建。推送 main 或手动运行 **Build Android APK**，成功后在该次 Actions 页下载 `LocalVoiceInput-arm64` artifact，解压得到可安装的 Debug APK。所有成功发布的构建必须使用同一个 CI Debug 签名，以便覆盖安装。工作流从已交付 APK 固定公开证书 SHA-256，构建前校验缓存密钥、打包后再校验 APK 签名；缓存缺失或指纹不一致直接失败，不自动生成新密钥。原密钥目前保留在 GitHub Actions 缓存中，若缓存被清理必须恢复原密钥才能继续构建。
+不需要预先下载模型即可构建。推送 main 或手动运行 **Build Android APK**，成功后在该次 Actions 页下载 `LocalVoiceInput-arm64` artifact，解压得到可安装的 Debug APK。所有发布构建必须使用仓库 Actions Secrets 中的固定签名。构建前核对 `.github/signing-certificate.sha256`，打包后再核对 APK 签名；密钥缺失或指纹不一致直接失败，不自动生成新密钥。
+
+签名配置尚待提供或确认初始化：`ANDROID_SIGNING_KEYSTORE_BASE64`、`ANDROID_SIGNING_STORE_PASSWORD`、`ANDROID_SIGNING_KEY_ALIAS`、`ANDROID_SIGNING_KEY_PASSWORD`。此前默认 Debug 密钥的实际路径为 `/home/runner/.config/.android/debug.keystore`，旧缓存配置未保存该文件；旧 runner 的私钥无法从 APK 公钥证书恢复。如果改用新固定密钥，已安装的不同签名版本需要重装一次，之后才可持续覆盖升级。
 
 模型切换、常驻内存和麦克风行为需要在 ARM64 真机上验证；CI 单元测试与构建不能替代真机效果和耗时测试。
 

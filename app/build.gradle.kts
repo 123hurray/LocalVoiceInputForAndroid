@@ -22,6 +22,17 @@ android {
         }
     }
 
+    val persistentKeystore = System.getenv("LOCALVOICE_KEYSTORE_PATH")
+    if (!persistentKeystore.isNullOrBlank()) {
+        signingConfigs.create("persistent") {
+            storeFile = file(persistentKeystore)
+            storePassword = System.getenv("LOCALVOICE_STORE_PASSWORD")
+            keyAlias = System.getenv("LOCALVOICE_KEY_ALIAS")
+            keyPassword = System.getenv("LOCALVOICE_KEY_PASSWORD")
+        }
+        buildTypes.getByName("debug").signingConfig = signingConfigs.getByName("persistent")
+    }
+
     buildTypes {
         release {
             optimization {
