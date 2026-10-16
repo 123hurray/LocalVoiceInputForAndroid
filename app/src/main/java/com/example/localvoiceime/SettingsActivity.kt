@@ -23,6 +23,11 @@ class SettingsActivity : Activity() {
     private lateinit var autoReturn: Switch
     private data class ModelRow(val progress: TextView, val download: Button, val use: Button, val delete: Button)
     private val rows = mutableMapOf<AsrModel, ModelRow>()
+    private lateinit var updateStatus: TextView
+    private lateinit var updateAction: Button
+    private lateinit var checkUpdate: Button
+    private var installWhenReady = false
+    private var awaitingInstallPermission = false
     private var deleting = false
     private val handler = Handler(Looper.getMainLooper())
     private var selected = AsrModel.SENSE_VOICE
@@ -46,7 +51,7 @@ class SettingsActivity : Activity() {
         }
         page.addView(label("本地语音", 28f, VoiceStyle.text))
         page.addView(label("按住说话，松手输入", 16f, VoiceStyle.muted))
-        page.addView(label("语音始终在本机处理，只有下载语音包时使用网络。", 14f, VoiceStyle.muted))
+        page.addView(label("语音始终在本机处理，仅下载语音包、手动检查和下载更新时使用网络。", 14f, VoiceStyle.muted))
         page.addView(section("开始使用"))
         page.addView(action("启用本地语音键盘") {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
@@ -137,6 +142,20 @@ class SettingsActivity : Activity() {
             page.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
         }
         page.addView(label("首次准备需要一点时间。快速启动可减少之后的等待；系统清理后台后需要重新准备。", 13f, VoiceStyle.muted))
+        page.addView(section("应用更新"))
+        val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
+        page.addView(label("当前版本 $currentVersion", 15f, VoiceStyle.muted))
+        updateStatus = label("点击检查 GitHub 上的最新正式版本。", 14f, VoiceStyle.muted)
+        page.addView(updateStatus)
+        checkUpdate = action("检查更新") { AppUpdates.check(this); renderUpdates() }
+        page.addView(checkUpdate)
+        updateAction = action("下载并安装") {
+            if (AppUpdates.state.apk?.exists() == true) installUpdate()
+            else { installWhenReady = true; AppUpdates.download(this); renderUpdates() }
+        }
+        page.addView(updateAction)
+        awaitingInstallPermission = savedInstanceState?.getBoolean("awaitingInstallPermission") ?: false
+        renderUpdates()
         setContentView(ScrollView(this).apply { setBackgroundColor(VoiceStyle.background); addView(page) })
         initialising = false
         renderModels()
@@ -151,10 +170,59 @@ class SettingsActivity : Activity() {
         initialising = false
         preparedModel = null
         handler.post(refresh)
+        if (awaitingInstallPermission) {
+            awaitingInstallPermission = false
+            if (packageManager.canRequestPackageInstalls()) installUpdate()
+            else android.widget.Toast.makeText(this, "未允许安装，可稍后点击安装重试", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
     override fun onPause() { handler.removeCallbacks(refresh); super.onPause() }
     private val refresh = object : Runnable {
-        override fun run() { renderModels(); prepareSelected(); handler.postDelayed(this, 600) }
+        override fun run() { renderModels(); renderUpdates(); prepareSelected(); handler.postDelayed(this, 600) }
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("awaitingInstallPermission", awaitingInstallPermission)
+        super.onSaveInstanceState(outState)
+    }
+    private fun renderUpdates() {
+        val state = AppUpdates.state
+        if (state.message.isNotEmpty()) updateStatus.text = state.message
+        checkUpdate.isEnabled = !state.busy
+        updateAction.visibility = if (state.release != null) android.view.View.VISIBLE else android.view.View.GONE
+        updateAction.isEnabled = !state.busy
+        updateAction.text = if (state.apk?.exists() == true) "安装更新" else "下载并安装"
+        if (installWhenReady && !state.busy) {
+            installWhenReady = false
+            if (state.apk?.exists() == true) installUpdate()
+        }
+    }
+    private fun installUpdate() {
+        val apk = AppUpdates.state.apk?.takeIf { it.exists() } ?: return
+        try {
+            if (!packageManager.canRequestPackageInstalls()) {
+                AlertDialog.Builder(this).setTitle("允许安装更新")
+                    .setMessage("请在接下来的系统页面允许本地语音安装应用，返回后继续安装。")
+                    .setNegativeButton("稍后", null)
+                    .setPositiveButton("去设置") { _, _ ->
+                        try {
+                            awaitingInstallPermission = true
+                            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                android.net.Uri.parse("package:$packageName")))
+                        } catch (_: Exception) {
+                            awaitingInstallPermission = false
+                            updateStatus.text = "无法打开安装权限设置，请在系统设置中允许安装应用"
+                        }
+                    }.show()
+                return
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.updates", apk)
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        } catch (_: Exception) {
+            updateStatus.text = "无法打开安装程序，请稍后重试"
+        }
     }
     private fun prepareSelected() {
         if (deleting || !quickStart.isChecked || !repository.isInstalled(selected) || preparedModel == selected) return

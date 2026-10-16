@@ -11,7 +11,7 @@ Data flow:
 ## Privacy invariants
 
 - Never upload, persist, log, or share microphone audio.
-- INTERNET is authorized for explicit model downloads only. Never upload audio or add cloud ASR.
+- INTERNET is authorized for explicit model downloads and user-triggered GitHub Release update checks/downloads only. Never upload audio or add cloud ASR.
 - Keep audio at 16 kHz, mono, PCM 16-bit unless the model pipeline changes.
 - Stop and release `AudioRecord` when the input view finishes or the service dies.
 - Run recording and inference off the main thread.
