@@ -97,7 +97,7 @@ class VoiceInputService : InputMethodService() {
             val speechArea = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(dp(20), dp(10), dp(20), dp(20))
+                setPadding(dp(20), 0, dp(20), 0)
                 setBackgroundColor(VoiceStyle.surface)
                 contentDescription = "按住此区域说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -149,9 +149,9 @@ class VoiceInputService : InputMethodService() {
         window.window?.setWindowAnimations(0)
         // Keep one stable target height across idle, recording and recognition states.
         val availableDp = (resources.displayMetrics.heightPixels / resources.displayMetrics.density).toInt() - 80
-        inputPanel.layoutParams = inputPanel.layoutParams.apply {
-            height = dp(minOf(settings.keyboardHeightDp, availableDp.coerceAtLeast(200)))
-        }
+        val panelHeight = minOf(settings.keyboardHeightDp, availableDp.coerceAtLeast(200))
+        inputPanel.layoutParams = inputPanel.layoutParams.apply { height = dp(panelHeight) }
+        bars.visibility = if (panelHeight < 280) View.GONE else View.VISIBLE
         ready = false
         canRecord = ModelRepository(this).isInstalled(settings.asrModel)
         if (!canRecord) {
