@@ -51,34 +51,43 @@ class VoiceInputService : InputMethodService() {
         window.window?.navigationBarColor = VoiceStyle.background
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(12), dp(20), dp(18))
+            setPadding(0, dp(8), 0, 0)
             setBackgroundColor(VoiceStyle.background)
             addView(LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL
-                addView(TextView(context).apply {
-                    text = "本地语音"; textSize = 16f; setTextColor(VoiceStyle.text)
-                }, LinearLayout.LayoutParams(0, dp(44), 1f))
+                setPadding(dp(20), 0, dp(20), 0)
+                addView(VoiceStyle.button(context, "返回键盘").apply {
+                    textSize = 14f
+                    setOnClickListener { stopRecording(false); cancelPendingSpeech(); returnToKeyboard(true) }
+                }, LinearLayout.LayoutParams(dp(120), dp(44)))
+                addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
                 addView(VoiceStyle.button(context, "设置").apply {
                     textSize = 14f
                     setOnClickListener { openSettings() }
                 }, LinearLayout.LayoutParams(dp(76), dp(44)))
             })
             status = TextView(context).apply {
-                text = "准备中…"; textSize = 22f; gravity = Gravity.CENTER
+                text = "按住，说出你想写的"; textSize = 22f; gravity = Gravity.CENTER
                 setTextColor(VoiceStyle.text); setTypeface(typeface, Typeface.BOLD)
-                setPadding(0, dp(20), 0, dp(8)); accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+                setPadding(dp(20), dp(20), dp(20), dp(8))
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             }
             addView(status)
-            bars = VoiceBarsView(context)
-            addView(bars, LinearLayout.LayoutParams(-1, dp(56)))
             hint = TextView(context).apply {
-                text = "语音只在本机处理"; textSize = 13f; gravity = Gravity.CENTER; setTextColor(VoiceStyle.muted)
-                setPadding(0, 0, 0, dp(16))
+                text = "松手输入 · 上滑取消"; textSize = 13f; gravity = Gravity.CENTER
+                setTextColor(VoiceStyle.muted)
+                setPadding(dp(20), 0, dp(20), dp(14))
             }
             addView(hint)
-            hold = VoiceStyle.button(context, "按住说话", primary = true).apply {
-                textSize = 18f
-                contentDescription = "按住说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
+
+            // The compact button is only a visual cue. The entire lower panel receives gestures.
+            val speechArea = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(20), dp(10), dp(20), dp(20))
+                setBackgroundColor(VoiceStyle.surface)
+                contentDescription = "按住此区域说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 setOnTouchListener { view, event ->
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
@@ -100,13 +109,20 @@ class VoiceInputService : InputMethodService() {
                     }
                     true
                 }
-                // Accessibility ACTION_CLICK bypasses touch; offer a start/stop equivalent.
                 setOnClickListener { if (recording) stopRecording(true) else startRecordingOrRequestPermission() }
             }
-            addView(hold, LinearLayout.LayoutParams(-1, dp(76)))
-            addView(VoiceStyle.button(context, "返回键盘").apply {
-                setOnClickListener { stopRecording(false); cancelPendingSpeech(); returnToKeyboard(true) }
-            }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
+            bars = VoiceBarsView(context).apply {
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            speechArea.addView(bars, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(12) })
+            hold = VoiceStyle.button(context, "按住说话", primary = true).apply {
+                textSize = 16f
+                isClickable = false
+                isFocusable = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            speechArea.addView(hold, LinearLayout.LayoutParams(dp(168), dp(52)))
+            addView(speechArea, LinearLayout.LayoutParams(-1, dp(190)))
         }
     }
 
