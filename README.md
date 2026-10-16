@@ -53,7 +53,7 @@ JDK 17，Android SDK 与版本见 `.github/workflows/android.yml`。
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
-不需要预先下载模型即可构建。推送 main 或手动运行 **Build Android APK**，成功后在该次 Actions 页下载 `LocalVoiceInput-arm64` artifact，解压得到可安装的 Debug APK。相同仓库连续构建使用固定 CI Debug 签名，以便覆盖安装；首次安装如遇签名不一致，需要先卸载旧开发版本。
+不需要预先下载模型即可构建。推送 main 或手动运行 **Build Android APK**，成功后在该次 Actions 页下载 `LocalVoiceInput-arm64` artifact，解压得到可安装的 Debug APK。所有成功发布的构建必须使用同一个 CI Debug 签名，以便覆盖安装。工作流从已交付 APK 固定公开证书 SHA-256，构建前校验缓存密钥、打包后再校验 APK 签名；缓存缺失或指纹不一致直接失败，不自动生成新密钥。原密钥目前保留在 GitHub Actions 缓存中，若缓存被清理必须恢复原密钥才能继续构建。
 
 模型切换、常驻内存和麦克风行为需要在 ARM64 真机上验证；CI 单元测试与构建不能替代真机效果和耗时测试。
 

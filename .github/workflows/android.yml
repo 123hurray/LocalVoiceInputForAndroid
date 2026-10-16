@@ -22,22 +22,42 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - name: Keep development signing key between builds
-        uses: actions/cache@v4
+      - name: Restore original signing key (never generate a replacement)
+        uses: actions/cache/restore@v4
         with:
           path: ~/.android/debug.keystore
           key: localvoice-debug-keystore-v1
+          fail-on-cache-miss: true
+      - name: Verify original signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$HOME/.android/debug.keystore"
+          expected="$(tr -d '\r\n' < .github/signing-certificate.sha256)"
+          actual="$(keytool -exportcert -alias androiddebugkey -keystore "$HOME/.android/debug.keystore" -storepass android | sha256sum | cut -d ' ' -f1)"
+          test "$actual" = "$expected" || { echo 'Signing identity mismatch; refusing to build.'; exit 1; }
+          echo "Verified certificate SHA-256: $actual"
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Unit tests and APK
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace
-      - name: Name APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk LocalVoiceInput-arm64.apk
+      - name: Verify APK signature and name APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk" | tee apk-signature.txt
+          expected="$(tr -d '\r\n' < .github/signing-certificate.sha256)"
+          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apk-signature.txt | tr '[:upper:]' '[:lower:]')"
+          test "$actual" = "$expected" || { echo 'APK signer mismatch; refusing to publish.'; exit 1; }
+          cp "$apk" LocalVoiceInput-arm64.apk
       - uses: actions/upload-artifact@v4
         with:
           name: LocalVoiceInput-arm64
-          path: LocalVoiceInput-arm64.apk
+          path: |
+            LocalVoiceInput-arm64.apk
+            apk-signature.txt
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4
