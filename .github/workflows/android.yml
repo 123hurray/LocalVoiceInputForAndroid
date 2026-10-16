@@ -15,9 +15,6 @@ jobs:
     timeout-minutes: 30
     env:
       LOCALVOICE_KEYSTORE_PATH: /tmp/localvoice-signing.keystore
-      LOCALVOICE_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
-      LOCALVOICE_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
-      LOCALVOICE_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -33,9 +30,12 @@ jobs:
       - name: Unit tests and source compilation
         run: ./gradlew :app:testDebugUnitTest :app:compileDebugKotlin --stacktrace
       - name: Restore permanent signing identity
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          LOCALVOICE_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          LOCALVOICE_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
         run: |
           set -euo pipefail
           test -n "$SIGNING_KEYSTORE_BASE64" || { echo 'Permanent signing key is required. APK publication is blocked; no replacement key will be generated.'; exit 1; }
@@ -46,8 +46,14 @@ jobs:
           test "$actual" = "$expected" || { echo 'Signing identity mismatch; refusing to build APK.'; exit 1; }
           echo "Verified certificate SHA-256: $actual"
       - name: Build APK with verified signing key
+        if: github.event_name != 'pull_request'
+        env:
+          LOCALVOICE_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          LOCALVOICE_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          LOCALVOICE_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: ./gradlew :app:assembleDebug --no-configuration-cache --stacktrace
       - name: Verify APK signature and name APK
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -58,6 +64,7 @@ jobs:
           test "$actual" = "$expected" || { echo 'APK signer mismatch; refusing to publish.'; exit 1; }
           cp "$apk" LocalVoiceInput-arm64.apk
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: LocalVoiceInput-arm64
           path: |
