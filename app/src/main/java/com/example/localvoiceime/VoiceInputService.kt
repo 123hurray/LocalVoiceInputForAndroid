@@ -583,7 +583,12 @@ class VoiceInputService : InputMethodService() {
             setTextColor(VoiceStyle.muted); setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setOnClickListener {
                 if (!recording && draftUndo.isNotEmpty()) {
-                    draftText = draftUndo.removeLast(); correctionWords.show(draftText); renderCandidates()
+                    draftText = draftUndo.removeLast()
+                    // Undo may restore a draft from an earlier recording; do not align new audio to it.
+                    pendingSpeech?.cancel(); pendingSpeech = null
+                    candidateEpoch++; candidateRunning = false; candidatesLoaded = false
+                    draftAudio = null; otherResults.clear()
+                    correctionWords.show(draftText); renderCandidates()
                 }
             }
         }, LinearLayout.LayoutParams(-2, dp(40)))
