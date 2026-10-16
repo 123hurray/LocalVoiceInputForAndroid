@@ -75,6 +75,7 @@ object SpeechEngine {
                 audio.discard()
                 main.post { if (!audio.cancelled) final(Result.failure(error)) }
             } finally {
+                if (done && activeStreaming === this) activeStreaming = null
                 scheduled.set(false)
                 if (!done && audio.hasWork()) schedule()
             }
