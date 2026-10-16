@@ -210,6 +210,7 @@ class SettingsActivity : Activity() {
     }
     private fun description(model: AsrModel) = when (model) {
         AsrModel.SENSE_VOICE -> "推荐用于日常中文和中英混合输入。"
+        AsrModel.PARAFORMER_STREAMING -> "边说边显示文字，松手后自动补标点。支持中英混说，单次最多 60 秒。"
         AsrModel.PARAFORMER -> "中英混合输入的另一选择，可对比常用词的识别效果。"
         AsrModel.WHISPER_TINY -> "下载体积更小，适合短句；单次最多 25 秒。混合输入效果需试用比较。"
         AsrModel.WHISPER_BASE -> "另一款多语言语音包；单次最多 25 秒。可与轻量版比较效果。"

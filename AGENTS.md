@@ -23,9 +23,9 @@ Data flow:
   `silero_vad_v5.onnx` are local, ignored files. Never add them to Git.
 - The model archive URL and SHA-256 are documented in `README.md` and
   `app/src/main/assets/sense-voice/README.md`.
-- Current runtime: sherpa-onnx 1.13.4, switchable offline models, ARM64 only.
+- Current runtime: sherpa-onnx 1.13.4, switchable offline models plus streaming Paraformer/CT-Transformer, ARM64 only.
 - Downloaded weights live in noBackupFilesDir; verify catalog SHA-256 and exact size before publishing.
-- All native engine operations are serialized by SpeechEngine. Do not close engines from IME lifecycle callbacks.
+- All native engine operations are serialized by SpeechEngine. Streaming audio is bounded to 60 seconds and cancellation drops queued buffers. Do not close engines from IME lifecycle callbacks.
 - Interaction is hold-to-talk: no auto-start or silence endpointing. Keep user-facing copy nontechnical.
 - Quick start retains one model in process memory only, without a foreground service or notification. Never keep the microphone open in the background.
 

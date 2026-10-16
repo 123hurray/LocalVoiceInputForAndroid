@@ -9,6 +9,7 @@ import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
 fun createAsrConfig(model: AsrModel, resolve: (String) -> String): OfflineModelConfig {
     val modelConfig = OfflineModelConfig(numThreads = 2, debug = false, provider = "cpu")
     when (model) {
+        AsrModel.PARAFORMER_STREAMING -> error("Use the streaming recognizer")
         AsrModel.SENSE_VOICE -> {
             modelConfig.senseVoice = OfflineSenseVoiceModelConfig(
                 model = resolve("model.int8.onnx"), language = "auto",

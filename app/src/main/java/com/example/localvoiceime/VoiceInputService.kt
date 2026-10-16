@@ -31,6 +31,8 @@ class VoiceInputService : InputMethodService() {
     private lateinit var hint: TextView
     private lateinit var hold: Button
     private lateinit var bars: VoiceBarsView
+    private lateinit var preview: TextView
+    private var streamingSpeech: SpeechEngine.StreamingSpeech? = null
     private lateinit var inputPanel: LinearLayout
     private val main = Handler(Looper.getMainLooper())
     private val pcm = PcmSampleBuffer(SAMPLE_RATE * 60)
@@ -131,6 +133,15 @@ class VoiceInputService : InputMethodService() {
                 }
                 setOnClickListener { if (recording) stopRecording(true) else startRecordingOrRequestPermission() }
             }
+            preview = TextView(context).apply {
+                textSize = 18f; setTextColor(VoiceStyle.text); gravity = Gravity.CENTER
+                setPadding(0, dp(4), 0, dp(10))
+                maxLines = 4
+                ellipsize = android.text.TextUtils.TruncateAt.START
+                visibility = View.GONE
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            speechArea.addView(preview, LinearLayout.LayoutParams(-1, -2))
             bars = VoiceBarsView(context).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
@@ -224,6 +235,26 @@ class VoiceInputService : InputMethodService() {
         updateRecordingUi()
         val request = generation
         val limit = settings.asrModel.recordingLimitSeconds * SAMPLE_RATE
+        if (settings.asrModel == AsrModel.PARAFORMER_STREAMING) {
+            preview.text = "说话时，文字会显示在这里"
+            preview.visibility = View.VISIBLE
+            bars.visibility = View.GONE
+            val target = currentInputConnection
+            lateinit var session: SpeechEngine.StreamingSpeech
+            session = SpeechEngine.beginStreaming(this, partial = { text ->
+                if (!destroyed && active && request == generation && recording && streamingSpeech === session) {
+                    preview.text = text.ifBlank { "正在听你说…" }
+                }
+            }, final = { result ->
+                if (!destroyed && active && request == generation && streamingSpeech === session) {
+                    if (recording) stopRecording(false)
+                    streamingSpeech = null
+                    completeRecognition(result, target, request)
+                }
+            })
+            streamingSpeech = session
+        }
+        val liveSession = streamingSpeech
         recordingThread = thread(name = "Voice-Record") {
             val buffer = ShortArray(512)
             while (recording) {
@@ -231,6 +262,7 @@ class VoiceInputService : InputMethodService() {
                 if (n > 0 && recording) {
                     val allowed = minOf(n, (limit - pcm.size()).coerceAtLeast(0))
                     pcm.append(buffer, allowed)
+                    liveSession?.accept(buffer, allowed)
                     var peak = 0
                     for (i in 0 until n) peak = max(peak, abs(buffer[i].toInt()))
                     level = (peak / 10000f).coerceIn(0.1f, 1f)
@@ -260,35 +292,53 @@ class VoiceInputService : InputMethodService() {
         bars.recording = false; bars.level = 0f; bars.invalidate()
         hold.text = "按住说话"; hold.background = VoiceStyle.rounded(this, VoiceStyle.surface)
         if (!submit) {
+            streamingSpeech?.cancel(); streamingSpeech = null
+            preview.text = ""; preview.visibility = View.GONE
             pcm.clear(); status.text = "已取消"; hint.text = "按住说话 · 松手输入"; return
         }
+        if (pcm.size() < SAMPLE_RATE / 4) {
+            streamingSpeech?.cancel(); streamingSpeech = null; pcm.clear()
+            preview.text = ""; preview.visibility = View.GONE
+            status.text = "说话时间太短，请重试"; return
+        }
+        val live = streamingSpeech
+        if (live != null) {
+            pcm.clear(); recognizing = true; hold.isEnabled = false
+            status.text = "正在整理文字…"; hint.text = "稍等片刻"
+            live.finish()
+            return
+        }
         val samples = pcm.toNormalizedFloatArray(); pcm.clear()
-        if (samples.size < SAMPLE_RATE / 4) { status.text = "说话时间太短，请重试"; return }
         recognizing = true; hold.isEnabled = false
         status.text = if (ready) "正在识别…" else "正在处理…"
         hint.text = if (ready) "稍等片刻" else "正在准备，很快就好"
         val target = currentInputConnection
         val request = generation
         pendingSpeech = SpeechEngine.recognize(this, settings.asrModel, samples) { result ->
-            if (destroyed || !active || request != generation) return@recognize
-            pendingSpeech = null
-            recognizing = false
-            hold.isEnabled = true
-            val text = result.getOrNull().orEmpty().trim()
-            when {
-                result.isFailure -> { status.text = "这次没识别成功"; hint.text = "请再试一次" }
-                text.isBlank() -> { status.text = "没有听清，请再说一次"; hint.text = "按住说话 · 松手输入" }
-                target == null || currentInputConnection !== target -> {
-                    status.text = "输入位置已变化"; hint.text = "请在要输入的位置重新说话"
-                }
-                target.commitText(text, 1) -> {
-                    status.text = "已输入"; hint.text = "还可以继续说"
-                    if (settings.autoReturnToPreviousIme) main.postDelayed({
-                        if (!destroyed && active && request == generation && currentInputConnection === target) returnToKeyboard(false)
-                    }, 150)
-                }
-                else -> { status.text = "无法输入到这里"; hint.text = "请选择输入框后重试" }
+            completeRecognition(result, target, request)
+        }
+    }
+
+    private fun completeRecognition(result: Result<String>, target: android.view.inputmethod.InputConnection?, request: Int) {
+        if (destroyed || !active || request != generation) return
+        pendingSpeech = null
+        recognizing = false
+        hold.isEnabled = true
+        val text = result.getOrNull().orEmpty().trim()
+        if (preview.visibility == View.VISIBLE) preview.text = text
+        when {
+            result.isFailure -> { status.text = "这次没识别成功"; hint.text = "请再试一次" }
+            text.isBlank() -> { status.text = "没有听清，请再说一次"; hint.text = "按住说话 · 松手输入" }
+            target == null || currentInputConnection !== target -> {
+                status.text = "输入位置已变化"; hint.text = "请在要输入的位置重新说话"
             }
+            target.commitText(text, 1) -> {
+                status.text = "已输入"; hint.text = "还可以继续说"
+                if (settings.autoReturnToPreviousIme) main.postDelayed({
+                    if (!destroyed && active && request == generation && currentInputConnection === target) returnToKeyboard(false)
+                }, 150)
+            }
+            else -> { status.text = "无法输入到这里"; hint.text = "请选择输入框后重试" }
         }
     }
 
@@ -309,6 +359,8 @@ class VoiceInputService : InputMethodService() {
         bars.recording = true; bars.level = level; bars.cancelling = cancelGesture; bars.invalidate()
     }
     private fun cancelPendingSpeech() {
+        streamingSpeech?.cancel(); streamingSpeech = null
+        if (::preview.isInitialized) { preview.text = ""; preview.visibility = View.GONE }
         pendingSpeech?.cancel()
         pendingSpeech = null
         recognizing = false

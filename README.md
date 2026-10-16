@@ -70,3 +70,13 @@ JDK 17，Android SDK 与版本见 `.github/workflows/android.yml`。
 - [Fcitx5 for Android](https://github.com/fcitx5-android/fcitx5-android)
 
 代码与模型的许可证及再分发要求需分别遵守。
+
+## 实时中英输入（1.2.0）
+
+在设置中下载并选择「Paraformer · 实时中英版（含标点）」，约 298 MiB，包含 encoder/decoder INT8、词表及 CT-Transformer INT8 标点模型。按住讲话时在语音面板预览文字，松手后刷新流式尾帧并自动补标点，然后一次提交到目标文本框。停顿不会自动提交，单次上限 60 秒，上滑取消。首次加载时可以先录音，模型准备后追上进度。
+
+这一路径不使用 SenseVoice、不进行离线 ASR 后校准，也不承诺无限回改已经稳定的前文。预览暂不实时添加标点，标点在松手后统一恢复，减少反复推理和文字抖动。读取音频与推理分别运行；有上限的内存队列采用合并调度，不为每次读取堆积 worker 任务。取消后清空待处理数据，过期结果不提交。共享引擎切换时释放旧模型；快速启动仍无常驻通知。
+
+模型来源：流式中英 Paraformer 使用 sherpa-onnx 维护者的 Hugging Face 导出，标点使用 ranger810 镜像的 CT-Transformer INT8 ONNX；模型清单固定源提交、字节数和 SHA-256，下载完成校验后才可使用。对应模型及转换代码许可应分别遵守。
+
+实机验收应覆盖：首次加载立即讲话、中英混说、长停顿、60 秒上限、上滑取消、切换输入框、删除模型、切回其他语音包及低高度面板。CI 不能替代 ARM64 麦克风与 native 推理性能实测。
