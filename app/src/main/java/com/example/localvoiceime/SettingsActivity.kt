@@ -161,7 +161,8 @@ class SettingsActivity : Activity() {
         preparedModel = selected
         SpeechEngine.prepare(this, selected) { /* Shared engine remains ready for the IME. */ }
     }
-    private fun saveSettings() = store.save(VoiceSettings(selected, quickStart.isChecked, autoReturn.isChecked, keyboardHeightDp))
+    private fun saveSettings() = store.save(store.load().copy(asrModel = selected, keepResident = quickStart.isChecked,
+        autoReturnToPreviousIme = autoReturn.isChecked, keyboardHeightDp = keyboardHeightDp))
     private fun renderModels() {
         selectedLabel.text = "当前：${selected.label}"
         val state = ModelDownloads.state

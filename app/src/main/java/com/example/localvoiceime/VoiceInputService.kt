@@ -31,6 +31,19 @@ class VoiceInputService : InputMethodService() {
     private lateinit var hint: TextView
     private lateinit var hold: Button
     private lateinit var bars: VoiceBarsView
+    private lateinit var correctionToggle: Button
+    private lateinit var speechArea: LinearLayout
+    private lateinit var correctionPanel: LinearLayout
+    private lateinit var correctionWords: CorrectionSelectionView
+    private lateinit var candidateButton: Button
+    private var correctionDialog: android.app.AlertDialog? = null
+    private var draftText = ""
+    private var draftAudio: FloatArray? = null
+    private var utteranceAudio: FloatArray? = null
+    private var draftTarget: android.view.inputmethod.InputConnection? = null
+    private var draftGeneration = 0
+    private var otherResult: String? = null
+    private val draftUndo = ArrayDeque<String>()
     private lateinit var preview: TextView
     private var streamingSpeech: SpeechEngine.StreamingSpeech? = null
     private lateinit var inputPanel: LinearLayout
@@ -79,6 +92,22 @@ class VoiceInputService : InputMethodService() {
                     setOnClickListener { stopRecording(false); cancelPendingSpeech(); returnToKeyboard(true) }
                 }, LinearLayout.LayoutParams(dp(112), dp(48)))
                 addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+                correctionToggle = Button(context).apply {
+                    textSize = 12f; isAllCaps = false; minWidth = 0
+                    setPadding(0, 0, 0, 0)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    setOnClickListener {
+                        if (recording || recognizing || draftText.isNotEmpty()) {
+                            android.widget.Toast.makeText(this@VoiceInputService, "请先完成或取消当前输入", android.widget.Toast.LENGTH_SHORT).show()
+                        } else {
+                            settings = settings.copy(correctionEnabled = !settings.correctionEnabled)
+                            VoiceSettingsStore(this@VoiceInputService).save(settings)
+                            renderCorrectionToggle()
+                        }
+                    }
+                }
+                addView(correctionToggle, LinearLayout.LayoutParams(dp(64), dp(48)))
+                renderCorrectionToggle()
                 addView(ImageButton(context).apply {
                     setImageResource(R.drawable.ic_settings)
                     imageTintList = android.content.res.ColorStateList.valueOf(VoiceStyle.muted)
@@ -103,7 +132,7 @@ class VoiceInputService : InputMethodService() {
             addView(hint)
 
             // The compact button is only a visual cue. The entire lower panel receives gestures.
-            val speechArea = LinearLayout(context).apply {
+            speechArea = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 setPadding(dp(20), 0, dp(20), 0)
@@ -154,6 +183,7 @@ class VoiceInputService : InputMethodService() {
             }
             speechArea.addView(hold, LinearLayout.LayoutParams(dp(168), dp(52)))
             addView(speechArea, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(createCorrectionPanel(), LinearLayout.LayoutParams(-1, 0, 1f))
         }
     }
 
@@ -164,6 +194,7 @@ class VoiceInputService : InputMethodService() {
         active = true
         val request = ++generation
         settings = VoiceSettingsStore(this).load()
+        renderCorrectionToggle()
         window.window?.setWindowAnimations(0)
         // Keep one stable target height across idle, recording and recognition states.
         val availableDp = (resources.displayMetrics.heightPixels / resources.displayMetrics.density).toInt() - 80
@@ -212,7 +243,8 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun startRecordingOrRequestPermission() {
-        if (recognizing || recording || !active) return
+        if (recognizing || recording || !active || draftText.isNotEmpty()) return
+        utteranceAudio = null
         if (!canRecord) { status.text = "请先在设置中下载语音包"; return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             startActivity(Intent(this, MicrophonePermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -301,6 +333,7 @@ class VoiceInputService : InputMethodService() {
             preview.text = ""; preview.visibility = View.GONE
             status.text = "说话时间太短，请重试"; return
         }
+        utteranceAudio = if (settings.correctionEnabled) pcm.toNormalizedFloatArray() else null
         val live = streamingSpeech
         if (live != null) {
             pcm.clear(); recognizing = true; hold.isEnabled = false
@@ -308,7 +341,7 @@ class VoiceInputService : InputMethodService() {
             live.finish()
             return
         }
-        val samples = pcm.toNormalizedFloatArray(); pcm.clear()
+        val samples = utteranceAudio ?: pcm.toNormalizedFloatArray(); pcm.clear()
         recognizing = true; hold.isEnabled = false
         status.text = if (ready) "正在识别…" else "正在处理…"
         hint.text = if (ready) "稍等片刻" else "正在准备，很快就好"
@@ -326,6 +359,11 @@ class VoiceInputService : InputMethodService() {
         hold.isEnabled = true
         val text = result.getOrNull().orEmpty().trim()
         if (preview.visibility == View.VISIBLE) preview.text = text
+        if (result.isSuccess && text.isNotBlank() && target != null && currentInputConnection === target && settings.correctionEnabled) {
+            showCorrection(text, target, request)
+            return
+        }
+        utteranceAudio = null
         when {
             result.isFailure -> { status.text = "这次没识别成功"; hint.text = "请再试一次" }
             text.isBlank() -> { status.text = "没有听清，请再说一次"; hint.text = "按住说话 · 松手输入" }
@@ -339,6 +377,163 @@ class VoiceInputService : InputMethodService() {
                 }, 150)
             }
             else -> { status.text = "无法输入到这里"; hint.text = "请选择输入框后重试" }
+        }
+    }
+
+    private fun renderCorrectionToggle() {
+        correctionToggle.text = if (settings.correctionEnabled) "纠错 ✓" else "纠错"
+        correctionToggle.setTextColor(if (settings.correctionEnabled) VoiceStyle.accent else VoiceStyle.muted)
+        correctionToggle.contentDescription = if (settings.correctionEnabled) "纠错已开启，点击关闭" else "纠错已关闭，点击开启"
+        correctionToggle.isSelected = settings.correctionEnabled
+    }
+
+    private fun createCorrectionPanel() = LinearLayout(this).apply {
+        correctionPanel = this
+        orientation = LinearLayout.VERTICAL
+        visibility = View.GONE
+        setPadding(dp(12), 0, dp(12), dp(6))
+        addView(TextView(context).apply {
+            text = "点选字词，滑动可多选；确认后输入"
+            textSize = 12f; setTextColor(VoiceStyle.muted)
+            setPadding(dp(4), 0, 0, dp(4))
+        })
+        correctionWords = CorrectionSelectionView(context)
+        addView(android.widget.ScrollView(context).apply {
+            isFillViewport = false
+            addView(correctionWords, android.widget.ScrollView.LayoutParams(-1, -2))
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        fun small(label: String, action: () -> Unit) = Button(context).apply {
+            text = label; textSize = 13f; isAllCaps = false; minWidth = 0
+            setPadding(dp(2), 0, dp(2), 0)
+            setTextColor(VoiceStyle.text)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setOnClickListener { action() }
+        }
+        addView(LinearLayout(context).apply {
+            val units = small("按词") {
+                if (recognizing) return@small
+                correctionWords.toggleUnits()
+                (getChildAt(0) as Button).text = if (correctionWords.characters) "按字" else "按词"
+            }
+            addView(units, LinearLayout.LayoutParams(0, dp(42), 1f))
+            candidateButton = small("候选") { requestAlternatives() }
+            addView(candidateButton, LinearLayout.LayoutParams(0, dp(42), 1f))
+            addView(small("删除") { replaceSelected("") }, LinearLayout.LayoutParams(0, dp(42), 1f))
+            addView(small("撤销") {
+                if (!recognizing && draftUndo.isNotEmpty()) {
+                    draftText = draftUndo.removeLast(); correctionWords.show(draftText)
+                }
+            }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        })
+        addView(LinearLayout(context).apply {
+            addView(small("重录") { if (!recognizing) { clearCorrection(); status.text = "按住，重新说一遍" } },
+                LinearLayout.LayoutParams(0, dp(46), 1f))
+            addView(small("取消") {
+                pendingSpeech?.cancel(); pendingSpeech = null; recognizing = false
+                clearCorrection(); status.text = "已取消"
+            }, LinearLayout.LayoutParams(0, dp(46), 1f))
+            addView(VoiceStyle.button(context, "输入", primary = true).apply {
+                minWidth = 0; setPadding(0, 0, 0, 0)
+                setOnClickListener { confirmCorrection() }
+            }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        })
+    }
+
+    private fun showCorrection(text: String, target: android.view.inputmethod.InputConnection, request: Int) {
+        draftText = text; draftAudio = utteranceAudio; utteranceAudio = null
+        draftTarget = target; draftGeneration = request; otherResult = null; draftUndo.clear()
+        correctionWords.show(text)
+        speechArea.visibility = View.GONE
+        status.visibility = View.GONE; hint.visibility = View.GONE
+        correctionPanel.visibility = View.VISIBLE
+    }
+
+    private fun clearCorrection() {
+        correctionDialog?.dismiss(); correctionDialog = null
+        draftText = ""; draftAudio = null; utteranceAudio = null; draftTarget = null
+        otherResult = null; draftUndo.clear()
+        if (::correctionPanel.isInitialized) {
+            correctionPanel.visibility = View.GONE
+            correctionWords.show(""); correctionWords.isEnabled = true
+            candidateButton.text = "候选"; candidateButton.isEnabled = true
+            speechArea.visibility = View.VISIBLE
+            status.visibility = View.VISIBLE; hint.visibility = View.VISIBLE
+        }
+    }
+
+    private fun replaceSelected(replacement: String) {
+        if (recognizing) return
+        val range = correctionWords.selection ?: return
+        draftUndo.addLast(draftText)
+        draftText = draftText.replaceRange(range.first, range.last + 1, replacement)
+        correctionWords.show(draftText)
+    }
+
+    private fun confirmCorrection() {
+        if (recognizing) return
+        val target = draftTarget
+        if (!active || generation != draftGeneration || target == null || currentInputConnection !== target) {
+            clearCorrection(); status.text = "输入位置已变化"; return
+        }
+        val text = draftText
+        if (text.isBlank()) { clearCorrection(); status.text = "没有要输入的文字"; return }
+        if (target.commitText(text, 1)) {
+            val request = generation
+            clearCorrection(); status.text = "已输入"
+            if (settings.autoReturnToPreviousIme) main.postDelayed({
+                if (!destroyed && active && request == generation && currentInputConnection === target) returnToKeyboard(false)
+            }, 150)
+        } else android.widget.Toast.makeText(this, "暂时无法输入，请重试", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    private fun requestAlternatives() {
+        if (recognizing) return
+        val range = correctionWords.selection
+        if (range == null) {
+            android.widget.Toast.makeText(this, "先点选或滑选要修改的字词", android.widget.Toast.LENGTH_SHORT).show(); return
+        }
+        fun display(other: String) {
+            if (!active || draftGeneration != generation || currentInputConnection !== draftTarget) return
+            val selected = correctionWords.selection ?: return
+            val current = correctionWords.selectedText()
+            val suggestion = CorrectionAlignment.alternative(draftText, other, selected.first, selected.last + 1)
+            if (suggestion == null || suggestion == current) {
+                android.widget.Toast.makeText(this, "另一模型没有给出不同建议，可按字选取或重录", android.widget.Toast.LENGTH_LONG).show()
+            } else android.app.AlertDialog.Builder(this@VoiceInputService)
+                .setTitle("另一模型建议，请核对")
+                .setItems(arrayOf("保留：$current", if (suggestion.isEmpty()) "删除所选内容" else "替换：$suggestion")) { _, which ->
+                    if (active && draftGeneration == generation && which == 1) replaceSelected(suggestion)
+                }.create().apply {
+                    correctionDialog?.dismiss()
+                    correctionDialog = this
+                    window?.let { dialogWindow ->
+                        dialogWindow.setType(android.view.WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
+                        val attributes = dialogWindow.attributes
+                        attributes.token = this@VoiceInputService.window.window?.decorView?.windowToken
+                        dialogWindow.attributes = attributes
+                    }
+                    setOnDismissListener { if (correctionDialog === this) correctionDialog = null }
+                    try { show() } catch (_: android.view.WindowManager.BadTokenException) { correctionDialog = null }
+                }
+        }
+        otherResult?.let { display(it); return }
+        val audio = draftAudio ?: return
+        val repository = ModelRepository(this)
+        val second = listOf(AsrModel.SENSE_VOICE, AsrModel.PARAFORMER, AsrModel.WHISPER_BASE, AsrModel.WHISPER_TINY)
+            .firstOrNull { it != settings.asrModel && audio.size <= it.recordingLimitSeconds * SAMPLE_RATE && repository.isInstalled(it) }
+        if (second == null) {
+            android.widget.Toast.makeText(this, "请先在设置中下载另一款语音包，用于生成候选", android.widget.Toast.LENGTH_LONG).show(); return
+        }
+        val request = generation
+        recognizing = true; candidateButton.text = "识别中…"; candidateButton.isEnabled = false
+        correctionWords.isEnabled = false
+        pendingSpeech = SpeechEngine.recognize(this, second, audio) { result ->
+            if (!active || request != generation || draftTarget == null) return@recognize
+            pendingSpeech = null; recognizing = false; ready = false
+            candidateButton.text = "候选"; candidateButton.isEnabled = true; correctionWords.isEnabled = true
+            result.mapCatching { check(it.isNotBlank()); it }.onSuccess { otherResult = it; display(it) }.onFailure {
+                android.widget.Toast.makeText(this, "候选生成失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -359,6 +554,7 @@ class VoiceInputService : InputMethodService() {
         bars.recording = true; bars.level = level; bars.cancelling = cancelGesture; bars.invalidate()
     }
     private fun cancelPendingSpeech() {
+        clearCorrection()
         streamingSpeech?.cancel(); streamingSpeech = null
         if (::preview.isInitialized) { preview.text = ""; preview.visibility = View.GONE }
         pendingSpeech?.cancel()
