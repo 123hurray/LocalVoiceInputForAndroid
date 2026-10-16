@@ -18,7 +18,7 @@ object VoiceStyle {
     }
     fun button(context: Context, label: String, primary: Boolean = false) = Button(context).apply {
         text = label; isAllCaps = false; textSize = 16f
-        setTextColor(if (primary) background else text)
+        setTextColor(if (primary) VoiceStyle.background else VoiceStyle.text)
         background = rounded(context, if (primary) accent else surface)
         minHeight = dp(context, 52)
         setPadding(dp(context, 16), dp(context, 10), dp(context, 16), dp(context, 10))
