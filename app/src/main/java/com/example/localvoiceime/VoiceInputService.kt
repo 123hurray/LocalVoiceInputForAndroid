@@ -163,7 +163,6 @@ class VoiceInputService : InputMethodService() {
         status.text = "按住，说出你想写的"
         hint.text = "松手输入 · 上滑取消"
         hold.isEnabled = true
-        if (settings.keepResident) ReadyService.start(this)
         SpeechEngine.prepare(this, settings.asrModel) { result ->
             if (!destroyed && active && request == generation) {
                 ready = result.isSuccess
@@ -225,7 +224,9 @@ class VoiceInputService : InputMethodService() {
                 if (n > 0 && recording) {
                     val allowed = minOf(n, (limit - pcm.size()).coerceAtLeast(0))
                     pcm.append(buffer, allowed)
-                    level = (buffer.take(n).maxOf { abs(it.toInt()) } / 10000f).coerceIn(0.1f, 1f)
+                    var peak = 0
+                    for (i in 0 until n) peak = max(peak, abs(buffer[i].toInt()))
+                    level = (peak / 10000f).coerceIn(0.1f, 1f)
                     if (pcm.size() >= limit) {
                         main.post { if (active && request == generation) stopRecording(!cancelGesture) }
                         break

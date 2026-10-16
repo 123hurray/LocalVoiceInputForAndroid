@@ -53,7 +53,7 @@ object ModelDownloads {
                 check(stage.renameTo(repository.directory(model))) { "无法保存语音包，请重试" }
                 state = State(model, spec.size, spec.size, "下载完成")
                 if (VoiceSettingsStore(app).load().let { it.keepResident && it.asrModel == model }) {
-                    ReadyService.start(app)
+                    SpeechEngine.prepare(app, model) { /* Reuse within this process; no background service. */ }
                 }
             } catch (_: InterruptedIOException) {
                 state = state.copy(message = "已暂停，下次可继续", running = false)

@@ -27,7 +27,7 @@ Data flow:
 - Downloaded weights live in noBackupFilesDir; verify catalog SHA-256 and exact size before publishing.
 - All native engine operations are serialized by SpeechEngine. Do not close engines from IME lifecycle callbacks.
 - Interaction is hold-to-talk: no auto-start or silence endpointing. Keep user-facing copy nontechnical.
-- Quick start uses a user-stoppable foreground service; never keep the microphone open in the background.
+- Quick start retains one model in process memory only, without a foreground service or notification. Never keep the microphone open in the background.
 
 ## Development
 

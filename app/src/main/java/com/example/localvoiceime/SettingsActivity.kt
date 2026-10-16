@@ -1,10 +1,7 @@
 package com.example.localvoiceime
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -63,13 +60,13 @@ class SettingsActivity : Activity() {
             setOnCheckedChangeListener { _, enabled ->
                 if (!initialising) {
                     saveSettings()
-                    if (enabled) { askNotificationPermission(); prepareSelected() }
-                    else { preparedModel = null; ReadyService.stop(this@SettingsActivity) }
+                    if (enabled) { prepareSelected() }
+                    else { preparedModel = null; SpeechEngine.release() }
                 }
             }
         }
         page.addView(quickStart)
-        page.addView(label("在后台保持就绪，下次打开更快。开启时会显示常驻通知，可随时关闭。", 14f, VoiceStyle.muted))
+        page.addView(label("保留已准备的语音包，下次打开更快。不显示常驻通知；系统清理后会自动重新准备。", 14f, VoiceStyle.muted))
         autoReturn = Switch(this).apply {
             text = "输入后返回原键盘"; textSize = 17f; setTextColor(VoiceStyle.text)
             minHeight = dp(56); isChecked = settings.autoReturnToPreviousIme
@@ -154,20 +151,7 @@ class SettingsActivity : Activity() {
     private fun prepareSelected() {
         if (!quickStart.isChecked || !repository.isInstalled(selected) || preparedModel == selected) return
         preparedModel = selected
-        if (quickStart.isChecked) {
-            askNotificationPermission()
-            ReadyService.start(this)
-        }
         SpeechEngine.prepare(this, selected) { /* Shared engine remains ready for the IME. */ }
-    }
-    private fun askNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            val prefs = getSharedPreferences("onboarding", MODE_PRIVATE)
-            if (!prefs.getBoolean("notification_asked", false)) {
-                prefs.edit().putBoolean("notification_asked", true).apply()
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 20)
-            }
-        }
     }
     private fun saveSettings() = store.save(VoiceSettings(selected, quickStart.isChecked, autoReturn.isChecked, keyboardHeightDp))
     private fun renderModels() {
