@@ -28,12 +28,15 @@ class StreamingAsr(context: Context) : AutoCloseable {
         return recognizer.getResult(stream).text.trim()
     }
 
+    fun punctuate(text: String): String =
+        if (text.isBlank()) text else punctuation.addPunctuation(text).trim()
+
     fun finish(stream: OnlineStream): String {
         // Flush the final online chunk; padding is never included in the recording timer.
         stream.acceptWaveform(FloatArray(12800), 16000)
         stream.inputFinished()
         val text = decode(stream)
-        return if (text.isBlank()) text else punctuation.addPunctuation(text).trim()
+        return punctuate(text)
     }
 
     override fun close() { punctuation.release(); recognizer.release() }

@@ -37,6 +37,9 @@ object SpeechEngine {
         private var owner: StreamingAsr? = null
         private var done = false
         private var previous = ""
+        private val punctuationCadence = StreamingPunctuationCadence()
+        private var punctuatedRaw = ""
+        private var punctuatedText = ""
         fun accept(samples: ShortArray, count: Int) { if (audio.append(samples, count)) schedule() }
         fun finish() { audio.finish(); schedule() }
         fun cancel() { audio.cancel(); schedule() }
@@ -59,9 +62,20 @@ object SpeechEngine {
                     val chunk = audio.take() ?: break
                     current.acceptWaveform(chunk, 16000)
                     val text = recognizer.decode(current)
-                    if (text != previous) {
-                        previous = text
-                        main.post { if (!audio.cancelled) partial(text) }
+                    if (punctuationCadence.advance(chunk.size, text)) {
+                        punctuatedText = recognizer.punctuate(text)
+                        punctuatedRaw = text
+                    }
+                    // Keep punctuation visible while an unchanged hypothesis is repeated.
+                    // A revised prefix falls back to the new hypothesis until the next pass.
+                    val display = when {
+                        punctuatedRaw.isEmpty() -> text
+                        text.startsWith(punctuatedRaw) -> punctuatedText + text.substring(punctuatedRaw.length)
+                        else -> text
+                    }
+                    if (display != previous) {
+                        previous = display
+                        main.post { if (!audio.cancelled) partial(display) }
                     }
                 }
                 if (audio.cancelled) { cancelOnWorker(); return }

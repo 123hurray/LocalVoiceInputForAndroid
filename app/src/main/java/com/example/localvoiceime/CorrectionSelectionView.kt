@@ -81,7 +81,8 @@ class CorrectionSelectionView(context: Context) : View(context) {
         val columns = CorrectionGrid.columns((width - 2 * inset).coerceAtLeast(1),
             max(dp(32).toFloat(), paint.textSize + dp(12)), gap.toFloat())
         tiles.clear()
-        val iterator = BreakIterator.getCharacterInstance(Locale.CHINA).apply { setText(text) }
+        val iterator = BreakIterator.getCharacterInstance(Locale.CHINA)
+        iterator.setText(text)
         var start = iterator.first(); var end = iterator.next()
         var row = 0; var column = 0
         while (end != BreakIterator.DONE) {
