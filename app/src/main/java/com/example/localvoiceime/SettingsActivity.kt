@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 
@@ -27,6 +28,7 @@ class SettingsActivity : Activity() {
     private var selected = AsrModel.SENSE_VOICE
     private var preparedModel: AsrModel? = null
     private var initialising = true
+    private var keyboardHeightDp = 320
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +38,7 @@ class SettingsActivity : Activity() {
         repository = ModelRepository(this)
         val settings = store.load()
         selected = settings.asrModel
+        keyboardHeightDp = settings.keyboardHeightDp
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(VoiceStyle.background)
@@ -73,6 +76,25 @@ class SettingsActivity : Activity() {
             setOnCheckedChangeListener { _, _ -> if (!initialising) saveSettings() }
         }
         page.addView(autoReturn)
+        page.addView(section("键盘高度"))
+        val heightLabel = label("面板高度：$keyboardHeightDp dp", 16f, VoiceStyle.text)
+        page.addView(heightLabel)
+        page.addView(SeekBar(this).apply {
+            max = 300
+            progress = keyboardHeightDp - 200
+            contentDescription = "语音键盘高度，200 到 500"
+            minHeight = dp(48)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    keyboardHeightDp = progress + 200
+                    heightLabel.text = "面板高度：$keyboardHeightDp dp"
+                    if (fromUser) saveSettings()
+                }
+                override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+            })
+        })
+        page.addView(label("调整到与常用键盘一致，减少切换时页面上下移动。下次打开语音输入时生效。", 14f, VoiceStyle.muted))
         page.addView(section("语音包"))
         selectedLabel = label("", 15f, VoiceStyle.accent)
         page.addView(selectedLabel)
@@ -147,7 +169,7 @@ class SettingsActivity : Activity() {
             }
         }
     }
-    private fun saveSettings() = store.save(VoiceSettings(selected, quickStart.isChecked, autoReturn.isChecked))
+    private fun saveSettings() = store.save(VoiceSettings(selected, quickStart.isChecked, autoReturn.isChecked, keyboardHeightDp))
     private fun renderModels() {
         selectedLabel.text = "当前：${selected.label}"
         val state = ModelDownloads.state

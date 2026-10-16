@@ -15,10 +15,12 @@ import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.Window
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.FrameLayout
 import android.widget.TextView
 import kotlin.concurrent.thread
 import kotlin.math.abs
@@ -29,6 +31,7 @@ class VoiceInputService : InputMethodService() {
     private lateinit var hint: TextView
     private lateinit var hold: Button
     private lateinit var bars: VoiceBarsView
+    private lateinit var inputPanel: LinearLayout
     private val main = Handler(Looper.getMainLooper())
     private val pcm = PcmSampleBuffer(SAMPLE_RATE * 60)
     private var settings = VoiceSettings()
@@ -47,9 +50,19 @@ class VoiceInputService : InputMethodService() {
     private var cancelGesture = false
     private var startedAt = 0L
 
+    override fun onEvaluateFullscreenMode(): Boolean = false
+
+    override fun onConfigureWindow(win: Window, isFullscreen: Boolean, isCandidatesOnly: Boolean) {
+        super.onConfigureWindow(win, isFullscreen, isCandidatesOnly)
+        win.setWindowAnimations(0)
+    }
+
     override fun onCreateInputView(): View {
         window.window?.navigationBarColor = VoiceStyle.background
+        window.window?.setWindowAnimations(0)
         return LinearLayout(this).apply {
+            inputPanel = this
+            layoutParams = FrameLayout.LayoutParams(-1, dp(VoiceSettingsStore(context).load().keyboardHeightDp))
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, 0)
             setBackgroundColor(VoiceStyle.background)
@@ -122,7 +135,7 @@ class VoiceInputService : InputMethodService() {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             speechArea.addView(hold, LinearLayout.LayoutParams(dp(168), dp(52)))
-            addView(speechArea, LinearLayout.LayoutParams(-1, dp(190)))
+            addView(speechArea, LinearLayout.LayoutParams(-1, 0, 1f))
         }
     }
 
@@ -133,6 +146,12 @@ class VoiceInputService : InputMethodService() {
         active = true
         val request = ++generation
         settings = VoiceSettingsStore(this).load()
+        window.window?.setWindowAnimations(0)
+        // Keep one stable target height across idle, recording and recognition states.
+        val availableDp = (resources.displayMetrics.heightPixels / resources.displayMetrics.density).toInt() - 80
+        inputPanel.layoutParams = inputPanel.layoutParams.apply {
+            height = dp(minOf(settings.keyboardHeightDp, availableDp.coerceAtLeast(200)))
+        }
         ready = false
         canRecord = ModelRepository(this).isInstalled(settings.asrModel)
         if (!canRecord) {
