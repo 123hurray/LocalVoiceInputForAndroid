@@ -5,13 +5,13 @@ plugins {
 android {
     namespace = "com.example.localvoiceime"
     compileSdk {
-        version = release(37)
+        version = release(36)
     }
 
     defaultConfig {
         applicationId = "com.example.localvoiceime"
         minSdk = 26
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 2
         versionName = "1.1.0"
 
