@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      LOCALVOICE_KEYSTORE_PATH: ${{ runner.temp }}/localvoice-signing.keystore
+      LOCALVOICE_KEYSTORE_PATH: /tmp/localvoice-signing.keystore
       LOCALVOICE_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
       LOCALVOICE_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
       LOCALVOICE_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
