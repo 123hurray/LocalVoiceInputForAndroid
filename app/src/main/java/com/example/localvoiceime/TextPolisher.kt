@@ -29,8 +29,8 @@ object TextPolisher {
                 checkNotNull(PolishPolicy.accept(text, bytes.toString(Charsets.UTF_8)))
             }
             main.post { if (!cancelled.get()) callback(result) }
-            // Brief reuse without keeping an additional model resident indefinitely.
-            main.postDelayed({ SpeechEngine.textTask { if (request == epoch) releaseNow() } }, 60_000)
+            // Reuse on demand for five minutes; no proactive loading or inference.
+            main.postDelayed({ SpeechEngine.textTask { if (request == epoch) releaseNow() } }, 300_000)
         }
         return cancelled
     }

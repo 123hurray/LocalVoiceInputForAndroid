@@ -197,6 +197,9 @@ class VoiceInputService : InputMethodService() {
                 setPadding(dp(8), 0, dp(8), 0)
                 hold = VoiceStyle.button(context, "按住说话").apply {
                     textSize = 15f
+                    setPadding(dp(8), 0, dp(8), 0)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                     setOnTouchListener { view, event ->
                         when (event.actionMasked) {
                             MotionEvent.ACTION_DOWN -> {
@@ -227,8 +230,8 @@ class VoiceInputService : InputMethodService() {
                     visibility = View.INVISIBLE
                     setOnClickListener { confirmCorrection() }
                 }
-                addView(sendButton, LinearLayout.LayoutParams(dp(56), dp(52)))
-                addView(hold, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
+                addView(hold, LinearLayout.LayoutParams(dp(96), dp(52)))
+                addView(sendButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
                 fun editButton(icon: Int, description: String, newline: Boolean) = ImageButton(context).apply {
                     setImageResource(icon)
                     imageTintList = android.content.res.ColorStateList.valueOf(VoiceStyle.text)
