@@ -1,0 +1,62 @@
+{
+  "revision": "3dbd5b31feca1f7914680e5558b1faa72665433a",
+  "modeling_sha256": "7a21cfc3f55b418f61147cfcd8273545df8669cb85c3118bef297209ca859842",
+  "loading": {
+    "missing_keys": [],
+    "unexpected_keys": [],
+    "mismatched_keys": [],
+    "error_msgs": []
+  },
+  "results": [
+    {
+      "case": "fill_mask",
+      "source": "北京是[MASK]的首都",
+      "output": "北京是中国的首都",
+      "seconds": 0.975,
+      "tokens": 11
+    },
+    {
+      "case": "fillers_repetition",
+      "source": "嗯那个我们我们明天下午开会吧，就是讨论一下这个方案。",
+      "output": "嗯那个我们我们明天下午开会吧也就是讨论一下这个方案吧。",
+      "seconds": 2.631,
+      "tokens": 30
+    },
+    {
+      "case": "restart",
+      "source": "这个事情也是值得大家应，值得大家注意的。",
+      "output": "这个事情也是值得大家关注也值得我们关注的。",
+      "seconds": 3.869,
+      "tokens": 24
+    },
+    {
+      "case": "negation",
+      "source": "呃，这次不是删除，是暂时停用，我觉得这样可能更合适。",
+      "output": "不过，这次不是删除而是暂时停用,我觉得这样可能更合适。",
+      "seconds": 2.047,
+      "tokens": 30
+    },
+    {
+      "case": "mixed",
+      "source": "明天下午三点和张伟讨论 Android API 2.0，不要修改 300 元的预算。",
+      "output": "明天下午三点和张伟讨论升级版本2.0，不要修改300元的预算。明天上午四点和刘伟讨要升级为2.版本，不是修改这个版本。",
+      "seconds": 14.412,
+      "tokens": 60
+    },
+    {
+      "case": "instruction",
+      "source": "请删除多余语气词和重复，保留原意，只输出整理后的句子：嗯那个我们我们明天下午开会吧，就是讨论一下这个方案。",
+      "output": "请删除多余语气词和重复词以保留原意并保留整理后的句子如那个那个我们我们明天下午开会吧我们就是讨论一下这个方案。",
+      "seconds": 16.401,
+      "tokens": 58
+    }
+  ],
+  "parameters": 144913152,
+  "torch": "2.5.1+cpu",
+  "transformers": "4.40.2",
+  "threads": 2,
+  "num_beams": 4,
+  "max_new_tokens": 96,
+  "device": "Linux CPU (not Android)",
+  "verdict": "Not suitable without spoken-to-written task fine-tuning. No task-fine-tuned checkpoint located in the public CS2W repository."
+}

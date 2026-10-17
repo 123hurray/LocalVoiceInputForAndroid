@@ -38,7 +38,6 @@ class VoiceInputService : InputMethodService() {
     private lateinit var candidateStatus: TextView
     private var candidateFailures = 0
     private lateinit var candidateStrip: LinearLayout
-    private var pendingPolish: java.util.concurrent.atomic.AtomicBoolean? = null
     private lateinit var sendButton: Button
     private var candidateRunning = false
     private var candidateEpoch = 0
@@ -108,7 +107,6 @@ class VoiceInputService : InputMethodService() {
                         } else {
                             settings = settings.copy(correctionEnabled = !settings.correctionEnabled)
                             VoiceSettingsStore(this@VoiceInputService).save(settings)
-                            if (!settings.correctionEnabled) SpeechEngine.textTask { TextPolisher.releaseNow() }
                             renderCorrectionToggle()
                         }
                     }
@@ -549,49 +547,8 @@ class VoiceInputService : InputMethodService() {
         } else android.widget.Toast.makeText(this, "暂时无法输入，请重试", android.widget.Toast.LENGTH_SHORT).show()
     }
 
-    private fun organizeDraft() {
-        if (!active || recording || recognizing || draftTarget == null || !settings.shouldPolish) return
-        if (!PolishModel.installed(this)) {
-            android.widget.Toast.makeText(this, "请先在设置中下载文字整理包", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        val original = draftText
-        if (original.isBlank()) return
-        val request = generation
-        recognizing = true; hold.isEnabled = false; sendButton.isEnabled = false
-        correctionWords.isEnabled = false
-        pendingSpeech?.cancel(); pendingSpeech = null
-        candidateEpoch++; candidateRunning = false
-        renderCandidates()
-        pendingPolish = TextPolisher.rewrite(this, original) { cleaned ->
-            if (!destroyed && active && request == generation && draftTarget != null && draftText == original) {
-                pendingPolish = null; recognizing = false
-                hold.isEnabled = true; sendButton.isEnabled = true; correctionWords.isEnabled = true
-                val text = cleaned.getOrNull()
-                if (text != null && text != original) {
-                    draftUndo.addLast(original); draftText = text
-                    otherResults.clear(); candidatesLoaded = false
-                    correctionWords.show(text)
-                }
-                renderCandidates()
-                android.widget.Toast.makeText(this, when {
-                    cleaned.isFailure -> "本次保留原文，可稍后重试"
-                    text == original -> "文字已通顺，未作修改"
-                    else -> "已整理，可撤销"
-                }, android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     private fun renderCandidates() {
         candidateStrip.removeAllViews()
-        if (settings.shouldPolish) candidateStrip.addView(Button(this).apply {
-            text = if (pendingPolish != null || recognizing) "整理中…" else "整理"
-            textSize = 12f; minWidth = 0
-            setTextColor(VoiceStyle.accent); setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            isEnabled = !recording && !recognizing
-            setOnClickListener { organizeDraft() }
-        }, LinearLayout.LayoutParams(-2, dp(40)))
         val range = correctionWords.selection
         if (draftUndo.isNotEmpty()) candidateStrip.addView(Button(this).apply {
             text = "撤销"; textSize = 12f; minWidth = 0
@@ -703,7 +660,6 @@ class VoiceInputService : InputMethodService() {
         }
     }
     private fun cancelPendingSpeech() {
-        pendingPolish?.set(true); pendingPolish = null
         clearCorrection()
         streamingSpeech?.cancel(); streamingSpeech = null
         if (::preview.isInitialized) { preview.text = ""; preview.visibility = View.GONE }

@@ -24,10 +24,6 @@ class SettingsActivity : Activity() {
     private data class ModelRow(val progress: TextView, val download: Button, val use: Button, val delete: Button)
     private val rows = mutableMapOf<AsrModel, ModelRow>()
     private lateinit var correctionSwitch: Switch
-    private lateinit var polishSwitch: Switch
-    private lateinit var polishStatus: TextView
-    private lateinit var polishDownload: Button
-    private lateinit var polishDelete: Button
     private lateinit var updateStatus: TextView
     private lateinit var updateAction: Button
     private lateinit var checkUpdate: Button
@@ -154,50 +150,11 @@ class SettingsActivity : Activity() {
             setOnCheckedChangeListener { _, enabled ->
                 if (!initialising) {
                     store.save(store.load().copy(correctionEnabled = enabled))
-                    if (!enabled) SpeechEngine.textTask { TextPolisher.releaseNow() }
-                    renderPolish()
                 }
             }
         }
         page.addView(correctionSwitch)
         page.addView(label("开启后先检查文字，再确认输入。也可在语音面板随时开关。", 14f, VoiceStyle.muted))
-        val correctionOptions = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), 0, 0, 0)
-        }
-        page.addView(correctionOptions)
-        correctionOptions.addView(label("在纠错区点击「整理」，去掉重复和多余的语气词。整理后可撤销，不会自动运行。", 14f, VoiceStyle.muted))
-        polishSwitch = Switch(this).apply {
-            text = "显示文字整理按钮"; textSize = 17f; setTextColor(VoiceStyle.text)
-            minHeight = dp(56); isChecked = settings.polishEnabled
-            setOnCheckedChangeListener { _, enabled ->
-                if (!initialising) {
-                    store.save(store.load().copy(polishEnabled = enabled))
-                    if (!enabled) SpeechEngine.textTask { TextPolisher.releaseNow() }
-                }
-            }
-        }
-        correctionOptions.addView(polishSwitch)
-        correctionOptions.addView(label("文字整理包 · 约 397 MB，下载后完全在本机处理。", 14f, VoiceStyle.muted))
-        polishStatus = label("", 14f, VoiceStyle.muted)
-        correctionOptions.addView(polishStatus)
-        polishDownload = action("下载") {
-            if (PolishModel.state.running) PolishModel.pause() else PolishModel.download(this)
-            renderPolish()
-        }
-        correctionOptions.addView(polishDownload)
-        polishDelete = action("删除文字整理包") {
-            AlertDialog.Builder(this).setTitle("删除文字整理包？")
-                .setMessage("删除后可随时重新下载。")
-                .setNegativeButton("取消", null).setPositiveButton("删除") { _, _ ->
-                    store.save(store.load().copy(polishEnabled = false))
-                    polishSwitch.isChecked = false
-                    PolishModel.delete(this) { if (!isDestroyed) renderPolish() }
-                    renderPolish()
-                }.show()
-        }
-        correctionOptions.addView(polishDelete)
-        renderPolish()
         page.addView(section("应用更新"))
         val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
         page.addView(label("当前版本 $currentVersion", 15f, VoiceStyle.muted))
@@ -224,7 +181,6 @@ class SettingsActivity : Activity() {
         initialising = true
         quickStart.isChecked = settings.keepResident
         correctionSwitch.isChecked = settings.correctionEnabled
-        polishSwitch.isChecked = settings.polishEnabled
         initialising = false
         preparedModel = null
         handler.post(refresh)
@@ -236,20 +192,11 @@ class SettingsActivity : Activity() {
     }
     override fun onPause() { handler.removeCallbacks(refresh); super.onPause() }
     private val refresh = object : Runnable {
-        override fun run() { renderModels(); renderPolish(); renderUpdates(); prepareSelected(); handler.postDelayed(this, 600) }
+        override fun run() { renderModels(); renderUpdates(); prepareSelected(); handler.postDelayed(this, 600) }
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("awaitingInstallPermission", awaitingInstallPermission)
         super.onSaveInstanceState(outState)
-    }
-    private fun renderPolish() {
-        val installed = PolishModel.installed(this)
-        val state = PolishModel.state
-        polishSwitch.isEnabled = correctionSwitch.isChecked && installed && !state.running
-        polishStatus.text = if (installed && !state.running) "已下载" else state.message.ifEmpty { "请先下载文字整理包" }
-        polishDownload.text = if (state.running) "暂停" else "下载"
-        polishDownload.isEnabled = !installed
-        polishDelete.isEnabled = !state.running && PolishModel.directory(this).exists()
     }
     private fun renderUpdates() {
         val state = AppUpdates.state

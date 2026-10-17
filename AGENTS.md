@@ -65,4 +65,4 @@ transcription, commitText, and return to Fcitx5.
 
 Next: OpenCC, terminology correction, Silero VAD, settings, and release hardening.
 
-Text cleanup uses Qwen3-0.6B Q4_K_M through a pinned llama.cpp build. Keep text/audio offline and unlogged; native work and model deletion share SpeechEngine worker. Cancel text processing on editor lifecycle changes. Text cleanup must only run from an explicit tap on the correction panel cleanup action, never from ASR completion or selection. Always review cleanup before commit and retain original via undo.
+Any future text cleanup must be offline, explicitly triggered by a user action, and validated on spoken Chinese before adding a downloadable model.
