@@ -9,7 +9,9 @@ data class VoiceSettings(
     val keyboardHeightDp: Int = 320,
     val polishEnabled: Boolean = false,
     val correctionEnabled: Boolean = false,
-)
+) {
+    val shouldPolish: Boolean get() = correctionEnabled && polishEnabled
+}
 
 class VoiceSettingsStore(context: Context) {
     private val preferences = context.getSharedPreferences("voice_settings", Context.MODE_PRIVATE)
