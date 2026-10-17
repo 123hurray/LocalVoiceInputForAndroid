@@ -160,5 +160,7 @@ object SpeechEngine {
         }
     }
 
+    internal fun textTask(task: () -> Unit) { worker.execute(task) }
+
     fun release() { worker.execute { closeStreaming(); engine?.close(); engine = null } }
 }

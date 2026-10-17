@@ -69,15 +69,15 @@ object ModelDownloads {
     }
 
     fun cancel() { cancelled = true }
-    private fun checkCancelled() { if (cancelled) throw InterruptedIOException() }
+    private fun checkCancelled() { if (Thread.currentThread().isInterrupted || cancelled) throw InterruptedIOException() }
 
-    private fun download(asset: ModelAsset, file: File, progress: (Long) -> Unit) {
+    internal fun download(asset: ModelAsset, file: File, cancelled: () -> Unit = { checkCancelled() }, progress: (Long) -> Unit) {
         var offset = file.length()
         var url = URL(asset.url)
         var connection: HttpURLConnection? = null
         try {
             for (redirect in 0..8) {
-                checkCancelled()
+                cancelled()
                 require(url.protocol == "https")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     instanceFollowRedirects = false
@@ -104,7 +104,7 @@ object ModelDownloads {
                     file.outputStreamAppend(offset > 0).buffered().use { output ->
                         val buffer = ByteArray(128 * 1024)
                         while (true) {
-                            checkCancelled()
+                            cancelled()
                             val n = input.read(buffer)
                             if (n < 0) break
                             require(received + n <= asset.size) { "Unexpected size" }

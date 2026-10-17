@@ -7,12 +7,14 @@ data class VoiceSettings(
     val keepResident: Boolean = true,
     val autoReturnToPreviousIme: Boolean = true,
     val keyboardHeightDp: Int = 320,
+    val polishEnabled: Boolean = false,
     val correctionEnabled: Boolean = false,
 )
 
 class VoiceSettingsStore(context: Context) {
     private val preferences = context.getSharedPreferences("voice_settings", Context.MODE_PRIVATE)
     fun load() = VoiceSettings(
+        polishEnabled = preferences.getBoolean("polish_enabled", false),
         correctionEnabled = preferences.getBoolean("correction_enabled", false),
         asrModel = AsrModel.fromId(preferences.getString("asr_model", null)),
         keepResident = preferences.getBoolean("keep_resident", true),
@@ -21,6 +23,7 @@ class VoiceSettingsStore(context: Context) {
     )
     fun save(settings: VoiceSettings) {
         preferences.edit()
+            .putBoolean("polish_enabled", settings.polishEnabled)
             .putBoolean("correction_enabled", settings.correctionEnabled)
             .putString("asr_model", settings.asrModel.id)
             .putBoolean("keep_resident", settings.keepResident)

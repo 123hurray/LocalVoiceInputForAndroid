@@ -39,6 +39,7 @@ class VoiceInputService : InputMethodService() {
     private var candidateFailures = 0
     private lateinit var candidateStrip: LinearLayout
     private lateinit var redoButton: Button
+    private var pendingPolish: java.util.concurrent.atomic.AtomicBoolean? = null
     private lateinit var sendButton: Button
     private data class DraftSnapshot(
         val text: String, val range: IntRange, val audio: FloatArray?,
@@ -190,8 +191,17 @@ class VoiceInputService : InputMethodService() {
             addView(speechArea, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(createCorrectionPanel(), LinearLayout.LayoutParams(-1, 0, 1f))
             // A single footer owns the same recording control in every state.
-            addView(FrameLayout(context).apply {
-                setPadding(dp(12), 0, dp(12), 0)
+            addView(LinearLayout(context).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(8), 0, dp(8), 0)
+                addView(VoiceStyle.button(context, "⌫").apply {
+                    contentDescription = "删除"; minWidth = 0; setPadding(0, 0, 0, 0)
+                    setOnClickListener { editKey(false) }
+                }, LinearLayout.LayoutParams(dp(44), dp(48)))
+                addView(VoiceStyle.button(context, "↵").apply {
+                    contentDescription = "换行"; minWidth = 0; setPadding(0, 0, 0, 0)
+                    setOnClickListener { editKey(true) }
+                }, LinearLayout.LayoutParams(dp(44), dp(48)))
                 hold = VoiceStyle.button(context, "按住说话").apply {
                     textSize = 15f
                     setOnTouchListener { view, event ->
@@ -218,13 +228,13 @@ class VoiceInputService : InputMethodService() {
                     }
                 }
                 redoButton = hold
-                addView(hold, FrameLayout.LayoutParams(dp(144), dp(52), Gravity.CENTER))
+                addView(hold, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
                 sendButton = VoiceStyle.button(context, "输入", primary = true).apply {
                     textSize = 14f; minWidth = 0; setPadding(0, 0, 0, 0)
                     visibility = View.INVISIBLE
                     setOnClickListener { confirmCorrection() }
                 }
-                addView(sendButton, FrameLayout.LayoutParams(dp(64), dp(52), Gravity.END or Gravity.CENTER_VERTICAL))
+                addView(sendButton, LinearLayout.LayoutParams(dp(56), dp(52)))
             }, LinearLayout.LayoutParams(-1, dp(64)))
         }
     }
@@ -417,6 +427,32 @@ class VoiceInputService : InputMethodService() {
 
     private fun completeRecognition(result: Result<String>, target: android.view.inputmethod.InputConnection?, request: Int) {
         if (destroyed || !active || request != generation) return
+        val original = result.getOrNull().orEmpty().trim()
+        if (!settings.polishEnabled || !PolishModel.installed(this) || original.isBlank() || target == null) {
+            completeRecognitionText(result, target, request)
+            return
+        }
+        recognizing = true; hold.isEnabled = false
+        status.text = "正在整理文字…"; hint.text = ""
+        if (correctionPanel.visibility == View.VISIBLE) {
+            candidateStatus.text = "正在整理文字…"; candidateStatus.visibility = View.VISIBLE
+        }
+        preview.text = original; preview.visibility = View.VISIBLE
+        pendingPolish = TextPolisher.rewrite(this, original) { cleaned ->
+            if (!destroyed && active && request == generation) {
+                pendingPolish = null
+                completeRecognitionText(Result.success(cleaned.getOrDefault(original)), target, request)
+                if (draftTarget != null && spokenEdit == null && draftText != original && draftUndo.isEmpty()) {
+                    draftUndo.addLast(original); renderCandidates()
+                }
+                if (cleaned.isFailure) android.widget.Toast.makeText(this,
+                    "本次保留原文，请确认后输入", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun completeRecognitionText(result: Result<String>, target: android.view.inputmethod.InputConnection?, request: Int) {
+        if (destroyed || !active || request != generation) return
         val destination = currentInputConnection
         pendingSpeech = null
         recognizing = false
@@ -440,7 +476,7 @@ class VoiceInputService : InputMethodService() {
             return
         }
         if (preview.visibility == View.VISIBLE) preview.text = text
-        if (result.isSuccess && text.isNotBlank() && target != null && destination != null && settings.correctionEnabled) {
+        if (result.isSuccess && text.isNotBlank() && target != null && destination != null && (settings.correctionEnabled || settings.polishEnabled)) {
             showCorrection(text, destination, request)
             return
         }
@@ -683,7 +719,30 @@ class VoiceInputService : InputMethodService() {
         if (redoRecording) redoButton.text = if (cancelGesture) "松手取消" else "松手替换 · ${seconds}s"
         bars.recording = true; bars.level = level; bars.cancelling = cancelGesture; bars.invalidate()
     }
+    private fun editKey(newline: Boolean) {
+        if (!active || recording || recognizing) return
+        if (draftTarget != null) {
+            val selected = correctionWords.selection
+            if (selected != null) { replaceSelected(if (newline) "\n" else ""); return }
+            if (!newline && draftText.isEmpty()) return
+            draftUndo.addLast(draftText)
+            draftText = if (newline) draftText + "\n" else {
+                val end = draftText.offsetByCodePoints(draftText.length, -1)
+                draftText.substring(0, end)
+            }
+            correctionWords.show(draftText); renderCandidates()
+            return
+        }
+        val target = currentInputConnection ?: return
+        if (newline) target.commitText("\n", 1)
+        else {
+            val selected = target.getSelectedText(0)
+            if (!selected.isNullOrEmpty()) target.commitText("", 1)
+            else target.deleteSurroundingTextInCodePoints(1, 0)
+        }
+    }
     private fun cancelPendingSpeech() {
+        pendingPolish?.set(true); pendingPolish = null
         redoRecording = false
         clearCorrection()
         streamingSpeech?.cancel(); streamingSpeech = null

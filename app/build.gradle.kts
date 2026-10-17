@@ -12,15 +12,20 @@ android {
         applicationId = "com.example.localvoiceime"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.3.5"
+        versionCode = 16
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
 
         ndk {
             abiFilters += "arm64-v8a"
         }
     }
+
+    ndkVersion = "28.2.13676358"
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
 
     val persistentKeystore = System.getenv("LOCALVOICE_KEYSTORE_PATH")
     if (!persistentKeystore.isNullOrBlank()) {

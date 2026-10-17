@@ -64,3 +64,5 @@ Completed: IME integration, AudioRecord, SenseVoice initialization, offline
 transcription, commitText, and return to Fcitx5.
 
 Next: OpenCC, terminology correction, Silero VAD, settings, and release hardening.
+
+Text cleanup uses Qwen3-0.6B Q4_K_M through a pinned llama.cpp build. Keep text/audio offline and unlogged; native work and model deletion share SpeechEngine worker. Cancel text processing on editor lifecycle changes. Always review cleanup before commit and retain original via undo.
