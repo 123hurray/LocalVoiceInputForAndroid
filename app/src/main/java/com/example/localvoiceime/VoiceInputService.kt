@@ -38,6 +38,10 @@ class VoiceInputService : InputMethodService() {
     private lateinit var candidateStatus: TextView
     private var candidateFailures = 0
     private lateinit var candidateStrip: LinearLayout
+    private lateinit var enterButton: ImageButton
+    private var macFeedback = ""
+    private var macFeedbackSource = ""
+    private var macFeedbackSelection: IntRange? = null
     private lateinit var sendButton: Button
     private var candidateRunning = false
     private var candidateEpoch = 0
@@ -234,7 +238,8 @@ class VoiceInputService : InputMethodService() {
                     setOnClickListener { editKey(newline) }
                 }
                 addView(editButton(R.drawable.ic_backspace, "删除", false), LinearLayout.LayoutParams(dp(48), dp(48)))
-                addView(editButton(R.drawable.ic_newline, "换行", true), LinearLayout.LayoutParams(dp(48), dp(48)))
+                enterButton = editButton(R.drawable.ic_newline, "换行", true)
+                addView(enterButton, LinearLayout.LayoutParams(dp(48), dp(48)))
             }, LinearLayout.LayoutParams(-1, dp(64)))
         }
     }
@@ -253,6 +258,7 @@ class VoiceInputService : InputMethodService() {
         val request = ++generation
         settings = VoiceSettingsStore(this).load()
         renderCorrectionToggle()
+        renderEnterKey()
         window.window?.setWindowAnimations(0)
         // Keep one stable target height across idle, recording and recognition states.
         val availableDp = (resources.displayMetrics.heightPixels / resources.displayMetrics.density).toInt() - 80
@@ -494,7 +500,17 @@ class VoiceInputService : InputMethodService() {
 
     }
 
+    private fun renderEnterKey() {
+        if (!::enterButton.isInitialized) return
+        val info = currentInputEditorInfo
+        val action = if (draftTarget != null) null else EditorAction.resolve(info?.imeOptions ?: EditorInfo.IME_ACTION_NONE, info?.actionLabel?.toString(), info?.actionId ?: 0)
+        enterButton.contentDescription = action?.label ?: "换行"
+        enterButton.setImageResource(if (action == null) R.drawable.ic_newline else R.drawable.ic_editor_action)
+        enterButton.tooltipText = enterButton.contentDescription
+    }
+
     private fun renderPrimaryAction(review: Boolean) {
+        renderEnterKey()
         hold.text = "按住说话"
         hold.visibility = if (review) View.GONE else View.VISIBLE
         sendButton.visibility = if (review) View.VISIBLE else View.GONE
@@ -513,7 +529,7 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun clearCorrection(restorePanel: Boolean = true) {
-        macEpoch++; macChecking = false
+        macEpoch++; macChecking = false; macFeedback = ""
         candidateEpoch++; candidateRunning = false; candidatesLoaded = false; candidateFailures = 0
         draftText = ""; draftAudio = null; utteranceAudio = null; draftTarget = null
         otherResults.clear(); draftUndo.clear()
@@ -559,6 +575,15 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun renderCandidates() {
+        renderCandidatesContent()
+        if (macChecking || (macFeedback.isNotEmpty() && macFeedbackSource == draftText && macFeedbackSelection == correctionWords.selection)) {
+            candidateStatus.text = if (macChecking) "正在查错词…" else macFeedback
+            candidateStatus.visibility = View.VISIBLE
+            candidateStatus.isClickable = false
+        }
+    }
+
+    private fun renderCandidatesContent() {
         checkWords.text = if (macChecking) "检查中…" else "查错词"
         checkWords.isEnabled = !macChecking && !recording && !recognizing
         candidateStrip.removeAllViews()
@@ -617,24 +642,32 @@ class VoiceInputService : InputMethodService() {
         val selection = correctionWords.selection
         val request = generation
         val epoch = ++macEpoch
+        macFeedback = ""
+        val started = android.os.SystemClock.elapsedRealtime()
         macChecking = true; renderCandidates()
         MacBert.check(this, source) { result ->
             if (!active || destroyed || epoch != macEpoch || request != generation || draftTarget == null) return@check
             macChecking = false; renderCandidates()
             if (source != draftText || selection != correctionWords.selection) return@check
+            val elapsed = java.lang.String.format(java.util.Locale.ROOT, "%.1f秒", (android.os.SystemClock.elapsedRealtime() - started) / 1000.0)
+            fun feedback(message: String) {
+                macFeedback = "$message\n$elapsed"; macFeedbackSource = source; macFeedbackSelection = selection
+                renderCandidates()
+            }
             val corrected = result.getOrNull()
             if (corrected == null) {
-                android.widget.Toast.makeText(this, "检查未完成，请稍后重试", android.widget.Toast.LENGTH_SHORT).show()
+                feedback("检查失败，请重试")
                 return@check
             }
             val before = if (selection == null) source else source.substring(selection.first, selection.last + 1)
             val after = if (selection == null) corrected else corrected.substring(selection.first, selection.last + 1)
             if (before == after) {
-                android.widget.Toast.makeText(this, "未发现可修改的错词", android.widget.Toast.LENGTH_SHORT).show()
+                feedback(if (selection == null) "未发现错词" else "所选文字无修改")
                 return@check
             }
             // Offer a candidate; text stays unchanged until the user taps it.
-            candidateStatus.text = "建议"; candidateStatus.visibility = View.VISIBLE
+            candidateStatus.text = "检查完成\n$elapsed"; candidateStatus.visibility = View.VISIBLE
+            candidateStatus.isClickable = false
             candidateStrip.removeAllViews()
             candidateStrip.addView(VoiceStyle.button(this, after).apply {
                 text = "采用：" + before.indices.filter { before[it] != after[it] }.joinToString("、") { "${before[it]}→${after[it]}" }
@@ -645,7 +678,7 @@ class VoiceInputService : InputMethodService() {
                     if (selection != correctionWords.selection) return@setOnClickListener
                     draftUndo.addLast(draftText)
                     draftText = if (selection == null) corrected else source.replaceRange(selection.first, selection.last + 1, after)
-                    macEpoch++
+                    macEpoch++; macFeedback = ""
                     correctionWords.show(draftText); renderCandidates()
                 }
             }, LinearLayout.LayoutParams(-2, dp(40)))
@@ -713,7 +746,14 @@ class VoiceInputService : InputMethodService() {
             return
         }
         val target = currentInputConnection ?: return
-        if (newline) target.commitText("\n", 1)
+        if (newline) {
+            val info = currentInputEditorInfo
+            val action = EditorAction.resolve(info?.imeOptions ?: EditorInfo.IME_ACTION_NONE, info?.actionLabel?.toString(), info?.actionId ?: 0)
+            if (action != null) target.performEditorAction(action.id)
+            else if ((info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION == EditorInfo.IME_ACTION_UNSPECIFIED) {
+                sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_ENTER)
+            } else target.commitText("\n", 1)
+        }
         else {
             val selected = target.getSelectedText(0)
             if (!selected.isNullOrEmpty()) target.commitText("", 1)
