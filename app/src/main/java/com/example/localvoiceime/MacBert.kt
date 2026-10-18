@@ -127,7 +127,7 @@ object MacBert {
                     OnnxTensor.createTensor(env, LongBuffer.wrap(LongArray(ids.size)), shape).use { types ->
                         checkNotNull(session).run(mapOf("input_ids" to input, "attention_mask" to mask, "token_type_ids" to types)).use { result ->
                             val tensor = result[0] as OnnxTensor
-                            val scores = tensor.floatBuffer.get()
+                            val scores = tensor.floatBuffer
                             val vocabularySize = tokenizer.vocabulary.size
                             check(tensor.info.shape.contentEquals(longArrayOf(1, ids.size.toLong(), vocabularySize.toLong())))
                             for (index in core until coreEnd) {
