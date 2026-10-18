@@ -1,0 +1,251 @@
+{
+  "revision": "615e6e09ef9a69ec487bc7c641ec3a311e2c11b9",
+  "model_sha256": "a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3",
+  "runtime": "1.23.2",
+  "window": {
+    "core_tokens": 96,
+    "context_tokens": 24
+  },
+  "results": [
+    {
+      "id": "filler",
+      "source": "嗯，那个，我们明天下午开会，就是讨论一下这个方案。",
+      "output": "嗯，那个，我们明天下午开会，就是讨论一下这个方案。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "repeat",
+      "source": "我们我们明天下午开会，讨论讨论这个方案。",
+      "output": "我们我们明天下午开会，讨论讨论这个方案。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "restart",
+      "source": "这个事情也是值得大家应，值得大家注意的。",
+      "output": "这个事情也是值得大家思，值得大家注意的。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "hesitation",
+      "source": "我想说的是，呃，这个这个功能需要再优化一下。",
+      "output": "我想说的是，呃，这个这个功能需要再优化一下。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "self_repair",
+      "source": "我们周三，不对，周四下午三点开会。",
+      "output": "我们周三，不对，周四下午三点开会。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "asr_error",
+      "source": "这个方案需要在测式环境里验证一下。",
+      "output": "这个方案需要在测试环境里验证一下。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "grammar",
+      "source": "通过这次讨论，使我们明确了下一步的目标。",
+      "output": "通过这次讨论，使我们明确了下一步的目标。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "redundancy",
+      "source": "我每天大约喝五次水左右。",
+      "output": "我每天大约喝五次水左右。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "negation",
+      "source": "这次不是删除，是暂时停用。不要修改原来的设置。",
+      "output": "这次不是删除，是暂时停用。不要修改原来的设置。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "mixed",
+      "source": "明天下午三点和张伟讨论 Android API 2.0，不要修改 300 元的预算。",
+      "output": "明天下午三点和张伟讨论 Android API 2.0，不要修改 300 元的预算。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "technical",
+      "source": "把 GitHub Actions 的 timeout 改为 30 分钟，保留 SenseVoice 和 Paraformer。",
+      "output": "把 GitHub Actions 的 timeout 改为 30 分钟，保留 SenseVoice 和 Paraformer。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "proper_names",
+      "source": "李想给理想汽车写了一份报告，张伟负责审核。",
+      "output": "李想给理想汽车写了一份报告，张伟负责审核。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "numbers",
+      "source": "订单号是 202610180032，金额是 1234.56 元。",
+      "output": "订单号是 202610180032，金额是 1234.56 元。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "valid_repetition",
+      "source": "你看看这个方案，慢慢来，大家讨论讨论再决定。",
+      "output": "你看看这个方案，慢慢来，大家讨论讨论再决定。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "meaningful_filler",
+      "source": "嗯，可以。那个穿蓝衣服的人是负责人。",
+      "output": "嗯，可以。那个穿蓝衣服的人是负责人。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "clean",
+      "source": "请把整理后的文字放在输入面板中，等我确认后再输入。",
+      "output": "请把整理后的文字放在输入面板中，等我确认后再输入。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "long",
+      "source": "嗯，那个，我觉得这个功能现在还是有一点问题，就是我们每次打开的时候，都要等模型加载完才能说话。我希望改成先录音，等模型加载完之后再识别。另外，那个，返回键盘的按钮可以小一点，录音按钮的位置要固定，不要每次都变。",
+      "output": "嗯，那个，我觉得这个功能现在还是有一点问题，就是我们每次打开的时候，都要等模型加载完才能说话。我希望改成先录音，等模型加载完之后再识别。另外，那个，返回键盘的按钮可以小一点，录音按钮的位置要固定，不要每次都变。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "smoking",
+      "source": "吸烟由害健康。",
+      "output": "吸烟有害健康。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "mood",
+      "source": "今天心晴很好。",
+      "output": "今天心情很好。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "basketball",
+      "source": "我最喜欢的运动是打蓝球。",
+      "output": "我最喜欢的运动是打篮球。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "report",
+      "source": "请给我一分报告。",
+      "output": "请给我一分报告。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "install",
+      "source": "这个软件已经按装好了。",
+      "output": "这个软件已经安装好了。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "should",
+      "source": "识别结果因该显示在下方。",
+      "output": "识别结果应该显示在下方。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "uh",
+      "source": "呃，我们明天再讨论。",
+      "output": "呃，我们明天再讨论。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "filler2",
+      "source": "那个，就是，我想把这个功能关掉。",
+      "output": "那个，就是，我想把这个功能关掉。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "triple",
+      "source": "我我我觉得这个方案可以。",
+      "output": "我我我觉得这个方案可以。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "repeat_phrase",
+      "source": "这个功能需要优化，这个功能需要优化一下。",
+      "output": "这个功能需要优化，这个功能需要优化一下。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "restart2",
+      "source": "这个问题我们下，下周再处理。",
+      "output": "这个问题我们下，下周再处理。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "repair_date",
+      "source": "会议定在三点，哦不，是四点。",
+      "output": "会议订在三点，哦不，是四点。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "dose",
+      "source": "每次零点五毫克，每天两次，不要增加剂量。",
+      "output": "每次零点五毫克，每天两次，不要增加剂量。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "version",
+      "source": "版本号是 v1.4.5，文件名是 model.int8.onnx。",
+      "output": "版本号是 v1.4.5，文件名是 model.int8.onnx。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "negative",
+      "source": "我不认为这个方案不可行。",
+      "output": "我不认为这个方案不可行。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "approximate",
+      "source": "预计大约需要三天，不是确定三天。",
+      "output": "预计大约需要三天，不是确定三天。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "quote",
+      "source": "请保留原话：“嗯，我再想想。”",
+      "output": "请保留原话：“嗯，我再想想。”",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "name2",
+      "source": "复旦大学的王晓明联系了小米的雷军。",
+      "output": "复旦大学的王晓明联系了小米的雷军。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "time",
+      "source": "周四下午四点开会，周三不用来。",
+      "output": "周四下午四点开会，周三不用来。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "english",
+      "source": "请运行 git status，然后执行 ./gradlew assembleDebug。",
+      "output": "请运行 git status，然后执行 ./gradlew assembleDebug。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "long_repeat",
+      "source": "嗯，我觉得我们我们现在这个流程，就是每次都要先打开设置，再回到输入面板，然后然后才能开始说话。我希望可以直接开始录音，模型还没加载完也没关系，等它准备好之后再识别。",
+      "output": "嗯，我觉得我们我们现在这个流程，就是每次都要先打开设置，再回到输入面板，然后然后才能开始说话。我希望可以直接开始录音，模型还没加载完也没关系，等它准备好之后再识别。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "long_mixed",
+      "source": "呃，那个，请把 Android API 2.0 的兼容问题记下来，就是我们我们下周四下午三点和张伟一起讨论，不要调整 300 元的预算，也不要删除 GitHub Actions 的配置。",
+      "output": "呃，那个，请把 Android API 2.0 的兼容问题记下来，就是我们我们下周四下午三点和张伟一起讨论，不要调整 300 元的预算，也不要删除 GitHub Actions 的配置。",
+      "matches_validated_guarded_fp32": true
+    },
+    {
+      "id": "long_clean",
+      "source": "请保留现有的识别方式。只有我主动点击整理按钮时才修改文字，并且先展示结果，等我确认后再输入。不要自动删除重复表达，因为有些重复是为了强调。",
+      "output": "请保留现有的识别方式。只有我主动点击整理按钮时才修改文字，并且先展示结果，等我确认后再输入。不要自动删除重复表达，因为有些重复是为了强调。",
+      "matches_validated_guarded_fp32": true
+    }
+  ]
+}

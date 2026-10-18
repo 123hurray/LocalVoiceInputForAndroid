@@ -6,6 +6,10 @@ import android.content.Intent
 
 /** Remove the previous version's readiness notification without starting any service. */
 class VoiceApplication : Application() {
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_LOW) MacBert.release()
+    }
     override fun onCreate() {
         super.onCreate()
         stopService(Intent().setClassName(this, "$packageName.ReadyService"))

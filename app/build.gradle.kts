@@ -2,6 +2,19 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// sherpa-onnx 1.13.4 already supplies ORT 1.27.0. Keep its core and add only
+// the matching Java bridge, rather than letting packaging pick an arbitrary core.
+val ortAndroidBridge = configurations.create("ortAndroidBridge") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+val prepareOrtBridge = tasks.register<Zip>("prepareOrtBridge") {
+    from(provider { zipTree(ortAndroidBridge.singleFile) })
+    exclude("jni/**/libonnxruntime.so")
+    archiveFileName.set("onnxruntime-java-bridge-1.27.0.aar")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/ort"))
+}
+
 android {
     namespace = "com.example.localvoiceime"
     compileSdk {
@@ -12,8 +25,8 @@ android {
         applicationId = "com.example.localvoiceime"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "1.4.5"
+        versionCode = 22
+        versionName = "1.4.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,6 +63,8 @@ android {
 }
 
 dependencies {
+    add(ortAndroidBridge.name, "com.microsoft.onnxruntime:onnxruntime-android:1.27.0@aar")
+    implementation(files(prepareOrtBridge.flatMap { it.archiveFile }))
     implementation("com.github.k2-fsa:sherpa-onnx:1.13.4")
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)

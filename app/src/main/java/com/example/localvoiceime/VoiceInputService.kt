@@ -42,6 +42,9 @@ class VoiceInputService : InputMethodService() {
     private var candidateRunning = false
     private var candidateEpoch = 0
     private var candidatesLoaded = false
+    private var macEpoch = 0
+    private var macChecking = false
+    private lateinit var checkWords: Button
     private var draftText = ""
     private var draftAudio: FloatArray? = null
     private var utteranceAudio: FloatArray? = null
@@ -463,6 +466,13 @@ class VoiceInputService : InputMethodService() {
         candidateStrip = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         addView(LinearLayout(context).apply {
             gravity = Gravity.CENTER_VERTICAL
+            checkWords = Button(context).apply {
+                text = "查错词"; textSize = 12f; minWidth = 0
+                setTextColor(VoiceStyle.muted); setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setPadding(dp(4), 0, dp(4), 0)
+                setOnClickListener { checkDraftWords() }
+            }
+            addView(checkWords, LinearLayout.LayoutParams(dp(64), -1))
             candidateStatus = TextView(context).apply {
                 textSize = 12f; setTextColor(VoiceStyle.muted)
                 setPadding(dp(4), 0, dp(4), 0)
@@ -503,6 +513,7 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun clearCorrection(restorePanel: Boolean = true) {
+        macEpoch++; macChecking = false
         candidateEpoch++; candidateRunning = false; candidatesLoaded = false; candidateFailures = 0
         draftText = ""; draftAudio = null; utteranceAudio = null; draftTarget = null
         otherResults.clear(); draftUndo.clear()
@@ -548,6 +559,8 @@ class VoiceInputService : InputMethodService() {
     }
 
     private fun renderCandidates() {
+        checkWords.text = if (macChecking) "检查中…" else "查错词"
+        checkWords.isEnabled = !macChecking && !recording && !recognizing
         candidateStrip.removeAllViews()
         val range = correctionWords.selection
         if (draftUndo.isNotEmpty()) candidateStrip.addView(Button(this).apply {
@@ -589,6 +602,54 @@ class VoiceInputService : InputMethodService() {
             setOnClickListener { replaceSelected("") }
         }, LinearLayout.LayoutParams(-2, dp(40)))
 
+    }
+
+    private fun checkDraftWords() {
+        if (macChecking || recording || recognizing || draftTarget == null || !active) return
+        if (!MacBert.installed(this)) {
+            android.widget.Toast.makeText(this, "请先下载错词检查包", android.widget.Toast.LENGTH_SHORT).show()
+            startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        }
+        pendingSpeech?.cancel(); pendingSpeech = null
+        candidateEpoch++; candidateRunning = false
+        val source = draftText
+        val selection = correctionWords.selection
+        val request = generation
+        val epoch = ++macEpoch
+        macChecking = true; renderCandidates()
+        MacBert.check(this, source) { result ->
+            if (!active || destroyed || epoch != macEpoch || request != generation || draftTarget == null) return@check
+            macChecking = false; renderCandidates()
+            if (source != draftText || selection != correctionWords.selection) return@check
+            val corrected = result.getOrNull()
+            if (corrected == null) {
+                android.widget.Toast.makeText(this, "检查未完成，请稍后重试", android.widget.Toast.LENGTH_SHORT).show()
+                return@check
+            }
+            val before = if (selection == null) source else source.substring(selection.first, selection.last + 1)
+            val after = if (selection == null) corrected else corrected.substring(selection.first, selection.last + 1)
+            if (before == after) {
+                android.widget.Toast.makeText(this, "未发现可修改的错词", android.widget.Toast.LENGTH_SHORT).show()
+                return@check
+            }
+            // Offer a candidate; text stays unchanged until the user taps it.
+            candidateStatus.text = "建议"; candidateStatus.visibility = View.VISIBLE
+            candidateStrip.removeAllViews()
+            candidateStrip.addView(VoiceStyle.button(this, after).apply {
+                text = "采用：" + before.indices.filter { before[it] != after[it] }.joinToString("、") { "${before[it]}→${after[it]}" }
+                contentDescription = "采用错词修改：$after"
+                textSize = 15f; minWidth = 0; maxLines = 1
+                setOnClickListener {
+                    if (!active || generation != request || epoch != macEpoch || draftText != source || recording || recognizing) return@setOnClickListener
+                    if (selection != correctionWords.selection) return@setOnClickListener
+                    draftUndo.addLast(draftText)
+                    draftText = if (selection == null) corrected else source.replaceRange(selection.first, selection.last + 1, after)
+                    macEpoch++
+                    correctionWords.show(draftText); renderCandidates()
+                }
+            }, LinearLayout.LayoutParams(-2, dp(40)))
+        }
     }
 
     private fun requestAlternatives() {

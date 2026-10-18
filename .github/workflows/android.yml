@@ -63,6 +63,17 @@ jobs:
           actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apk-signature.txt | tr '[:upper:]' '[:lower:]')"
           test "$actual" = "$expected" || { echo 'APK signer mismatch; refusing to publish.'; exit 1; }
           cp "$apk" LocalVoiceInput-arm64.apk
+      - name: Verify shared ONNX Runtime and Java bridge
+        if: github.event_name != 'pull_request'
+        shell: python
+        run: |
+          import zipfile
+          with zipfile.ZipFile('LocalVoiceInput-arm64.apk') as apk:
+              for library in ['libonnxruntime.so', 'libonnxruntime4j_jni.so', 'libsherpa-onnx-jni.so']:
+                  name = 'lib/arm64-v8a/' + library
+                  assert apk.namelist().count(name) == 1, name
+                  assert b'VERS_1.27.0' in apk.read(name), name
+          print('Verified single ORT 1.27.0 core with matching Java and sherpa bridges')
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:

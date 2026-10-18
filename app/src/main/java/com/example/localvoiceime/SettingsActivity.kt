@@ -24,6 +24,9 @@ class SettingsActivity : Activity() {
     private data class ModelRow(val progress: TextView, val download: Button, val use: Button, val delete: Button)
     private val rows = mutableMapOf<AsrModel, ModelRow>()
     private lateinit var correctionSwitch: Switch
+    private lateinit var wordStatus: TextView
+    private lateinit var wordDownload: Button
+    private lateinit var wordDelete: Button
     private lateinit var updateStatus: TextView
     private lateinit var updateAction: Button
     private lateinit var checkUpdate: Button
@@ -52,7 +55,7 @@ class SettingsActivity : Activity() {
         }
         page.addView(label("本地语音", 28f, VoiceStyle.text))
         page.addView(label("按住说话，松手输入", 16f, VoiceStyle.muted))
-        page.addView(label("语音始终在本机处理，仅下载语音包、手动检查和下载更新时使用网络。", 14f, VoiceStyle.muted))
+        page.addView(label("语音和文字始终在本机处理，仅下载功能包、手动检查和下载更新时使用网络。", 14f, VoiceStyle.muted))
         page.addView(section("开始使用"))
         page.addView(action("启用本地语音键盘") {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
@@ -155,6 +158,26 @@ class SettingsActivity : Activity() {
         }
         page.addView(correctionSwitch)
         page.addView(label("开启后先检查文字，再确认输入。也可在语音面板随时开关。", 14f, VoiceStyle.muted))
+        page.addView(label("错词检查 · MacBERT", 18f, VoiceStyle.text))
+        page.addView(label("下载后，在纠错页面点「查错词」。可先选中文字；点选建议后才会修改，支持撤销。", 14f, VoiceStyle.muted))
+        wordStatus = label("", 14f, VoiceStyle.muted)
+        page.addView(wordStatus)
+        page.addView(LinearLayout(this).apply {
+            wordDownload = action("下载") {
+                if (MacBert.state.downloading) MacBert.cancelDownload() else MacBert.download(this@SettingsActivity)
+                renderWords()
+            }
+            wordDelete = action("删除") {
+                AlertDialog.Builder(this@SettingsActivity).setTitle("删除错词检查包？")
+                    .setMessage("可随时重新下载。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("删除") { _, _ -> MacBert.delete(this@SettingsActivity) { renderWords() }; renderWords() }
+                    .show()
+            }
+            addView(wordDownload, LinearLayout.LayoutParams(0, dp(50), 1f))
+            addView(wordDelete, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(10) })
+        })
+        renderWords()
         page.addView(section("应用更新"))
         val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
         page.addView(label("当前版本 $currentVersion", 15f, VoiceStyle.muted))
@@ -192,7 +215,21 @@ class SettingsActivity : Activity() {
     }
     override fun onPause() { handler.removeCallbacks(refresh); super.onPause() }
     private val refresh = object : Runnable {
-        override fun run() { renderModels(); renderUpdates(); prepareSelected(); handler.postDelayed(this, 600) }
+        override fun run() { renderModels(); renderWords(); renderUpdates(); prepareSelected(); handler.postDelayed(this, 600) }
+    }
+    private fun renderWords() {
+        val state = MacBert.state
+        val installed = MacBert.installed(this)
+        wordStatus.text = when {
+            state.downloading -> "${state.message} · ${state.bytes * 100 / MacBert.size}%"
+            state.busy -> state.message
+            installed -> "已下载"
+            state.message.isNotEmpty() -> state.message
+            else -> "约 ${MacBert.size / 1024 / 1024} MB"
+        }
+        wordDownload.text = if (state.downloading) "暂停" else "下载"
+        wordDownload.isEnabled = state.downloading || (!state.busy && !installed)
+        wordDelete.isEnabled = !state.busy && MacBert.canDelete(this)
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean("awaitingInstallPermission", awaitingInstallPermission)
