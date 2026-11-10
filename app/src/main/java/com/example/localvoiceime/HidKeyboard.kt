@@ -21,8 +21,6 @@ import java.util.concurrent.TimeUnit
 internal class HidKeyboard(
     private val context: Context,
     private val adapter: BluetoothAdapter,
-    val mode: HidProfile,
-    var allowReconnect: Boolean,
     private val changed: (String) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -35,6 +33,11 @@ internal class HidKeyboard(
     private var registrationAttempts = 0
     private var reconnectAfter = Long.MAX_VALUE
     private var pluggedDevice: BluetoothDevice? = null
+    private var callbackDevice: BluetoothDevice? = null
+    private var callbackAt = 0L
+    private var explicitHost: BluetoothDevice? = null
+    private var connectUntil = 0L
+    private var missingSince = 0L
     private val preferences = context.getSharedPreferences("hid_host", Context.MODE_PRIVATE)
     private var lastAddress = preferences.getString("last_address", null)
     var connectionToken: Any? = null
@@ -69,10 +72,13 @@ internal class HidKeyboard(
             this@HidKeyboard.registered = registered
             if (!registered) {
                 clearHost()
+                callbackDevice = null
+                reconnectAfter = SystemClock.elapsedRealtime() + 700
                 publish("正在恢复蓝牙键盘…")
                 if (visible) main.post { refresh() }
                 return
             }
+            registrationAttempts = 0
             this@HidKeyboard.pluggedDevice = pluggedDevice
             if (reconnectAfter != Long.MAX_VALUE) reconnectAfter = SystemClock.elapsedRealtime() + 700
             refresh()
@@ -80,31 +86,60 @@ internal class HidKeyboard(
         }
 
         override fun onConnectionStateChanged(device: BluetoothDevice, state: Int) {
-            if (closed || profile == null || !registered) return
+            if (closed || profile == null) return
             when (state) {
-                BluetoothProfile.STATE_CONNECTED -> acceptHost(device)
+                BluetoothProfile.STATE_CONNECTED -> {
+                    // A link notification can arrive before registerApp or bonding completes.
+                    callbackDevice = device
+                    callbackAt = SystemClock.elapsedRealtime()
+                    if (registered) acceptHost(device)
+                }
+                BluetoothProfile.STATE_CONNECTING -> {
+                    if (host == null) {
+                        connectUntil = SystemClock.elapsedRealtime() + 5000
+                        publish(CONNECTING)
+                    }
+                }
                 BluetoothProfile.STATE_DISCONNECTING, BluetoothProfile.STATE_DISCONNECTED -> {
-                    if (device != host) return
-                    val interrupted = sending != null
-                    clearHost()
-                    publish(if (interrupted) "发送中断；正在等待 Mac 连接" else WAITING_FOR_HOST)
+                    if (device == callbackDevice) callbackDevice = null
+                    if (device == host) {
+                        val interrupted = sending != null
+                        clearHost()
+                        publish(if (interrupted) "发送中断；正在等待 Mac 连接" else WAITING_FOR_HOST)
+                    }
                 }
             }
         }
 
+        override fun onVirtualCableUnplug(device: BluetoothDevice) {
+            if (closed) return
+            if (device == callbackDevice) callbackDevice = null
+            if (device == pluggedDevice) pluggedDevice = null
+            if (device == explicitHost) explicitHost = null
+            if (device.address == lastAddress) {
+                lastAddress = null
+                preferences.edit().remove("last_address").apply()
+            }
+            if (device == host) {
+                clearHost()
+                publish(WAITING_FOR_HOST)
+            }
+        }
+
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-            if (closed || device != host) return
+            // macOS can query a neutral report before Android publishes the completed link.
+            if (closed || !registered || (host != null && device != host)) return
             val size = when {
-                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == mode.keyboardId -> 8
-                mode.composite && type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.MOUSE_ID -> 4
-                mode.composite && type == BluetoothHidDevice.REPORT_TYPE_OUTPUT && id.toInt() == HidReportProtocol.ACK_ID -> 1
+                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.KEYBOARD_ID -> 8
+                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.MOUSE_ID -> 4
+                type == BluetoothHidDevice.REPORT_TYPE_OUTPUT && id.toInt() == HidReportProtocol.ACK_ID -> 1
                 else -> return
             }
             runCatching { profile?.replyReport(device, type, id, ByteArray(size)) }
         }
 
         override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) {
-            if (!mode.composite || closed || device != host) return
+            if (closed || device != host) return
             val result = if (type == BluetoothHidDevice.REPORT_TYPE_OUTPUT) {
                 HidReportProtocol.parseAck(id.toInt(), data)
             } else null
@@ -116,7 +151,7 @@ internal class HidKeyboard(
         }
 
         override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) {
-            if (!mode.composite || closed || device != host) return
+            if (closed || device != host) return
             HidReportProtocol.parseAck(reportId.toInt(), data)?.let { acceptAck(device, it) }
         }
     }
@@ -140,6 +175,7 @@ internal class HidKeyboard(
         override fun onServiceDisconnected(type: Int) {
             if (closed) return
             clearHost()
+            callbackDevice = null
             profile = null; registered = false; registrationRequestedAt = null
             publish("蓝牙键盘服务已断开")
         }
@@ -191,10 +227,10 @@ internal class HidKeyboard(
             runCatching {
                 hid.registerApp(
                     BluetoothHidDeviceAppSdpSettings(
-                        if (mode.composite) "LocalVoice HID Combo" else "LocalVoice HID",
+                        "LocalVoice HID Combo",
                         "Local voice input", "LocalVoice",
-                        if (mode.composite) BluetoothHidDevice.SUBCLASS1_COMBO else BluetoothHidDevice.SUBCLASS1_KEYBOARD,
-                        HidReportProtocol.descriptor(mode),
+                        BluetoothHidDevice.SUBCLASS1_COMBO,
+                        HidReportProtocol.descriptor(),
                     ),
                     null, null, Executor { main.post(it) }, callback,
                 )
@@ -202,36 +238,81 @@ internal class HidKeyboard(
             return
         }
         val current = host
+        val links = runCatching { hid.connectedDevices }.getOrNull()
         if (current != null) {
-            when (runCatching { hid.getConnectionState(current) }.getOrNull()) {
-                BluetoothProfile.STATE_DISCONNECTED, BluetoothProfile.STATE_DISCONNECTING -> clearHost()
-                else -> return
+            val state = runCatching { hid.getConnectionState(current) }.getOrNull()
+            if (current in links.orEmpty() || state == BluetoothProfile.STATE_CONNECTED) {
+                missingSince = 0
+                return
             }
+            if (links == null && state == null) return
+            if (missingSince == 0L) missingSince = now
+            if (now - missingSince < LINK_GRACE_MS) return
+            clearHost()
         }
-        val bonded = runCatching { adapter.bondedDevices }.getOrDefault(emptySet())
-        val known = bonded.firstOrNull { it.address == lastAddress } ?: pluggedDevice?.takeIf { it in bonded }
-        val candidates = runCatching { hid.connectedDevices }.getOrDefault(emptyList())
-        val connected = candidates.firstOrNull { it == known } ?: candidates.firstOrNull()
-            ?: (listOfNotNull(known, pluggedDevice) + bonded).distinct().firstOrNull {
+
+        val bonded = pairedHosts()
+        val known = explicitHost?.takeIf { it in bonded }
+            ?: bonded.firstOrNull { it.address == lastAddress }
+            ?: pluggedDevice?.takeIf { it in bonded }
+        val observed = callbackDevice?.takeIf { now - callbackAt < LINK_GRACE_MS }
+        val connected = links.orEmpty().firstOrNull { it == known }
+            ?: links.orEmpty().firstOrNull { it in bonded }
+            ?: (listOfNotNull(observed, known, pluggedDevice) + bonded).distinct().firstOrNull {
                 runCatching { hid.getConnectionState(it) == BluetoothProfile.STATE_CONNECTED }.getOrDefault(false)
             }
+            ?: observed
         if (connected != null) acceptHost(connected)
         if (host != null) return
-        if (allowReconnect && known != null && now >= reconnectAfter) {
+        if (connected != null || links.orEmpty().isNotEmpty()) {
+            publish(PAIRING)
+            return
+        }
+        if (known != null && now >= reconnectAfter) {
             val state = runCatching { hid.getConnectionState(known) }.getOrNull()
             if (state == BluetoothProfile.STATE_DISCONNECTED) {
                 reconnectAfter = Long.MAX_VALUE
                 if (runCatching { hid.connect(known) }.getOrDefault(false)) {
-                    publish("正在恢复与 Mac 的连接…")
-                    main.postDelayed({ if (visible && host == null && registered) publish(WAITING_FOR_HOST) }, 4000)
+                    connectUntil = now + 5000
+                    publish(CONNECTING)
                     return
                 }
+                if (explicitHost != null) {
+                    explicitHost = null
+                    publish("暂未建立 HID 连接，请从 Mac 的蓝牙设置连接")
+                    return
+                }
+            } else if (state == BluetoothProfile.STATE_CONNECTING) {
+                reconnectAfter = Long.MAX_VALUE
+                connectUntil = now + 5000
             }
         }
-        if (status != "正在恢复与 Mac 的连接…") publish(WAITING_FOR_HOST)
+        if (now < connectUntil) publish(CONNECTING)
+        else if (status != "暂未建立 HID 连接，请从 Mac 的蓝牙设置连接") publish(WAITING_FOR_HOST)
+    }
+
+    fun deviceName(device: BluetoothDevice): String =
+        runCatching { device.name ?: device.address }.getOrDefault("接收设备")
+
+    fun pairedHosts(): List<BluetoothDevice> =
+        runCatching { adapter.bondedDevices.sortedBy(::deviceName) }.getOrDefault(emptyList())
+
+    fun connectTo(device: BluetoothDevice) {
+        if (closed || !visible || sending != null || device !in pairedHosts()) return
+        if (host == device) return
+        explicitHost = device
+        reconnectAfter = SystemClock.elapsedRealtime()
+        connectUntil = reconnectAfter + 5000
+        val previous = host
+        if (previous != null) {
+            runCatching { profile?.disconnect(previous) }
+            publish("正在切换接收设备…")
+        } else publish(CONNECTING)
+        refresh()
     }
 
     private fun clearHost() {
+        missingSince = 0
         mouseEpoch++
         mouseMayBePressed = false
         stopSend()
@@ -246,25 +327,33 @@ internal class HidKeyboard(
     }
 
     private fun acceptHost(device: BluetoothDevice) {
+        // Do not tear down a connection while the phone and Mac are still bonding.
         val bonded = runCatching { device.bondState == BluetoothDevice.BOND_BONDED }.getOrDefault(false)
-        if (!bonded || (host != null && host != device)) {
+        if (!bonded && device !in pairedHosts()) {
+            if (host == null) publish(PAIRING)
+            return
+        }
+        if (host != null && host != device) {
             runCatching { profile?.disconnect(device) }
             return
         }
         if (host == device) return
         host = device
+        missingSince = 0
+        explicitHost = null
+        connectUntil = 0
         connectionToken = Any()
         reconnectAfter = Long.MAX_VALUE
         lastAddress = device.address
         preferences.edit().putString("last_address", lastAddress).apply()
-        val name = runCatching { device.name ?: device.address }.getOrDefault("接收设备")
+        val name = deviceName(device)
         publish("已连接：$name", force = true)
     }
 
     fun sendMouse(buttons: Int, dx: Int, dy: Int, wheel: Int, click: Int = 0) {
         val hid = profile ?: return
         val device = host ?: return
-        if (!mode.composite || !visible || !ready) return
+        if (!visible || !ready) return
         mouseMayBePressed = mouseMayBePressed || buttons != 0 || click != 0
         val epoch = mouseEpoch
         worker.execute {
@@ -285,7 +374,7 @@ internal class HidKeyboard(
         val epoch = ++mouseEpoch
         val release = mouseMayBePressed
         mouseMayBePressed = false
-        if (!mode.composite || !release) return
+        if (!release) return
         val hid = profile ?: return
         val device = host ?: return
         if (!visible || closed) return
@@ -313,9 +402,6 @@ internal class HidKeyboard(
     fun send(text: String, progress: (String) -> Unit, done: (InputDelivery) -> Unit): Boolean {
         val reports = HidReportProtocol.reportUsages(HidTextFrame.encode(text))
         return enqueue({ hid, device, epoch ->
-            if (!mode.composite) return@enqueue if (writeKeys(hid, device, reports, 4L)) {
-                InputDelivery.SENT_WITHOUT_ACK
-            } else InputDelivery.FAILED
             fun update(message: String) = main.post {
                 if (!closed && sendEpoch == epoch && sending != null) progress(message)
             }
@@ -348,7 +434,7 @@ internal class HidKeyboard(
             if (Thread.currentThread().isInterrupted) return false
             before(usage)
             report[2] = usage.toByte()
-            if (!hid.sendReport(device, mode.keyboardId, report)) return false
+            if (!hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, report)) return false
             Thread.sleep(gap)
         }
         return true
@@ -365,7 +451,7 @@ internal class HidKeyboard(
         sending = worker.submit {
             val result = runCatching { operation(hid, device, epoch) }.getOrDefault(InputDelivery.FAILED)
             if (result == InputDelivery.FAILED) runCatching {
-                hid.sendReport(device, mode.keyboardId, ByteArray(8))
+                hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8))
             }
             main.post {
                 if (!closed && sendEpoch == epoch) {
@@ -397,6 +483,9 @@ internal class HidKeyboard(
     }
 
     companion object {
-        private const val WAITING_FOR_HOST = "等待连接：请在 Mac 的蓝牙设置中连接此手机"
+        private const val WAITING_FOR_HOST = "未连接：等待 Mac 建立 HID 连接"
+        private const val CONNECTING = "正在连接 Mac 的键盘和鼠标…"
+        private const val PAIRING = "正在配对 Mac…"
+        private const val LINK_GRACE_MS = 2200L
     }
 }
