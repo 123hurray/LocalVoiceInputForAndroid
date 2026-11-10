@@ -18,8 +18,8 @@ class VoiceInputService : InputMethodService() {
         override val editorInfo get() = currentInputEditorInfo
         override val isIme get() = true
 
-        override fun submit(target: Any, text: String, done: (Boolean) -> Unit) {
-            done(target is InputConnection && target === currentInputConnection && target.commitText(text, 1))
+        override fun submit(target: Any, text: String, done: (InputDelivery) -> Unit) {
+            done(if (target is InputConnection && target === currentInputConnection && target.commitText(text, 1)) InputDelivery.CONFIRMED else InputDelivery.FAILED)
         }
 
         override fun editKey(newline: Boolean) {

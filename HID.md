@@ -17,10 +17,31 @@
 
 普通 HID 键盘报告传输按键位置，不能直接发送任意 Unicode 字符。接收程序需捕获按键位置，按下述约定还原文字；普通文本编辑器会显示十六进制串，不会自动转换中文。
 
-每次发送：**F18**（HID usage `0x6d`） → **UTF-8 字节的小写十六进制** → **8 位 CRC-32 十六进制** → **F19**（`0x6e`）。每个按键都有独立的按下和抬起报告，无修饰键。CRC-32 使用常见的 IEEE 算法，只计算原始 UTF-8 字节。每段最多 1,024 字节。接收端只应在看到结束标志、校验通过且 UTF-8 解码成功后交付文字；新开始标志覆盖未完成的旧帧。发送端的「文字已发出」只表示本机蓝牙栈接受了报告，不是接收确认。
+每次发送：**F18**（HID usage `0x6d`） → **UTF-8 字节的小写十六进制** → **8 位 CRC-32 十六进制** → **F19**（`0x6e`）。键盘 Input Report ID 为 1，数据是无修饰键的 8 字节键盘报告。不同按键的抬起和下一键按下合并在同一个报告中；连续相同的键仍有中间的抬起报告。CRC-32 使用常见的 IEEE 算法，只计算原始 UTF-8 字节。每段最多 1,024 字节。接收端只应在看到结束标志、校验通过且 UTF-8 解码成功后交付文字；新开始标志覆盖未完成的旧帧。
 
 示例：`A中🙂` → `F18` + `41e4b8adf09f9982` + 对应 CRC-32 + `F19`。接收端应按物理按键位置解析十六进制，避免依赖键盘布局或当前输入法。
 
+## Mac 接收确认（v1.4.13 起）
+
+接收程序在每个 F19 后回一条 **Output Report，Report ID = 3，payload 恰好 1 字节**：
+
+- `0x01`：帧边界完整，CRC-32 正确，UTF-8 解码成功，且已交付或接收端已接管文字。只交付一次。
+- `0x02`：帧不完整、CRC-32 不符或 UTF-8 无效。丢弃整帧，不输入文字；手机重新发送完整帧，最多重试三次。
+- 其他值或其他报告 ID 不构成确认。手机等待回执 2.5 秒，超时保留草稿，不自动重发。每帧只回一条报告，且在处理完 F19 后立即回复。
+
+macOS 的 IOKit 调用示例。报告 ID 通过参数传入，并放在 IOKit 报告缓冲区第一字节；第二字节才是协议的 1 字节 payload：
+
+```c
+#include <IOKit/hid/IOHIDLib.h>
+
+IOReturn replyToLocalVoice(IOHIDDeviceRef device, bool frameAccepted) {
+    const uint8_t report[] = { 0x03, frameAccepted ? 0x01 : 0x02 };
+    return IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, 3, report, sizeof(report));
+}
+```
+
+使用对应手机键盘的 `IOHIDDeviceRef`。若 Mac 缓存了旧的 HID 描述符、找不到 Output Report 3，请在 Mac 蓝牙设置中忽略该设备后重新配对。接收端若直接解析 Input Report 字节，需识别键盘 Report ID 1；按系统键盘事件解析 F18/F19 时，帧内容格式不变。
+
 ## Linux 接收示例
 
-有 Python 3 和 `python-evdev` 的接收端，可用 `python3 tools/receive_hid.py /dev/input/eventN` 启动。请替换为 LocalVoice HID 对应的设备节点，并确保当前账户具有该节点的读取权限。示例独占读取选中的键盘，校验通过后把文字写入标准输出，可接入现有输入逻辑。
+在装有 Python 3 和 `python-evdev` 的接收端运行 `python3 tools/receive_hid.py /dev/input/eventN --hidraw /dev/hidrawN`，使用同一 LocalVoice HID 设备的两个节点。输入节点用于读取按键，hidraw 节点用于发送回执，需要相应的读取和写入权限。不带 `--hidraw` 只监看解码输出，不会给手机发送确认。

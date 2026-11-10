@@ -19,6 +19,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.FrameLayout
 import android.widget.TextView
+import android.widget.ScrollView
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.max
@@ -30,7 +31,7 @@ internal class VoiceInputPanel(private val host: Host) {
         val destination: Any?
         val editorInfo: EditorInfo? get() = null
         val isIme: Boolean get() = false
-        fun submit(target: Any, text: String, done: (Boolean) -> Unit)
+        fun submit(target: Any, text: String, done: (InputDelivery) -> Unit)
         fun editKey(newline: Boolean)
         fun openSettings()
         fun openModelSettings()
@@ -72,6 +73,8 @@ internal class VoiceInputPanel(private val host: Host) {
     private val otherResults = mutableListOf<String>()
     private val draftUndo = ArrayDeque<String>()
     private lateinit var preview: TextView
+    private lateinit var previewBox: View
+    private var previewScroll: ScrollView? = null
     private var streamingSpeech: SpeechEngine.StreamingSpeech? = null
     private lateinit var inputPanel: LinearLayout
     private val main = Handler(Looper.getMainLooper())
@@ -94,7 +97,7 @@ internal class VoiceInputPanel(private val host: Host) {
     fun createView(): View {
         return LinearLayout(context).apply {
             inputPanel = this
-            layoutParams = FrameLayout.LayoutParams(-1, dp(VoiceSettingsStore(context).load().keyboardHeightDp))
+            layoutParams = FrameLayout.LayoutParams(-1, if (host.isIme) dp(VoiceSettingsStore(context).load().keyboardHeightDp) else -1)
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, 0)
             setBackgroundColor(VoiceStyle.background)
@@ -194,10 +197,16 @@ internal class VoiceInputPanel(private val host: Host) {
                 textSize = 20f; setTextColor(VoiceStyle.text); gravity = Gravity.TOP or Gravity.START
                 setPadding(0, dp(4), 0, dp(10))
                 maxLines = Int.MAX_VALUE
-                visibility = View.GONE
                 accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+                if (!host.isIme) setTextIsSelectable(false)
             }
-            speechArea.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
+            previewBox = if (host.isIme) preview else ScrollView(context).apply {
+                isFillViewport = false
+                addView(preview, FrameLayout.LayoutParams(-1, -2))
+                previewScroll = this
+            }
+            previewBox.visibility = View.GONE
+            speechArea.addView(previewBox, LinearLayout.LayoutParams(-1, 0, 1f))
             bars = VoiceBarsView(context).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
@@ -272,8 +281,8 @@ internal class VoiceInputPanel(private val host: Host) {
         // Keep one stable target height across idle, recording and recognition states.
         val availableDp = (resources.displayMetrics.heightPixels / resources.displayMetrics.density).toInt() - 80
         val panelHeight = minOf(settings.keyboardHeightDp, availableDp.coerceAtLeast(200))
-        inputPanel.layoutParams = inputPanel.layoutParams.apply { height = dp(panelHeight) }
-        bars.visibility = if (panelHeight < 280) View.GONE else View.VISIBLE
+        inputPanel.layoutParams = inputPanel.layoutParams.apply { height = if (host.isIme) dp(panelHeight) else -1 }
+        bars.visibility = if (host.isIme && panelHeight < 280) View.GONE else View.VISIBLE
         ready = false
         if (!host.isIme && host.destination == null) {
             hold.isEnabled = false
@@ -345,21 +354,26 @@ internal class VoiceInputPanel(private val host: Host) {
         recorder = audio; pcm.clear(); recording = true
         cancelGesture = false
         status.visibility = View.GONE
-        preview.visibility = View.VISIBLE
+        previewBox.visibility = View.VISIBLE
         preview.text = ""
+        if (!host.isIme) bars.visibility = View.VISIBLE
         updateRecordingUi()
         val request = generation
         val limit = settings.asrModel.recordingLimitSeconds * SAMPLE_RATE
         if (settings.asrModel == AsrModel.PARAFORMER_STREAMING) {
             preview.text = ""
-            preview.visibility = View.VISIBLE
+            previewBox.visibility = View.VISIBLE
             bars.visibility = View.GONE
             val target = host.destination
             lateinit var session: SpeechEngine.StreamingSpeech
             session = SpeechEngine.beginStreaming(context, partial = { text ->
                 if (!destroyed && active && request == generation && recording && streamingSpeech === session) {
                     preview.text = text
-                    preview.post { preview.layout?.let { layout -> preview.scrollTo(0, max(0, layout.height - preview.height)) } }
+                    preview.post {
+                        val scroll = previewScroll
+                        if (scroll != null) scroll.scrollTo(0, max(0, preview.height - scroll.height))
+                        else preview.layout?.let { layout -> preview.scrollTo(0, max(0, layout.height - preview.height)) }
+                    }
                 }
             }, final = { result ->
                 if (!destroyed && active && request == generation && streamingSpeech === session) {
@@ -409,14 +423,14 @@ internal class VoiceInputPanel(private val host: Host) {
         hold.text = "按住说话"; hold.background = VoiceStyle.rounded(context, VoiceStyle.surface)
         if (!submit) {
             streamingSpeech?.cancel(); streamingSpeech = null
-            preview.text = ""; preview.visibility = View.GONE
+            preview.text = ""; previewBox.visibility = View.GONE
             pcm.clear()
             status.visibility = if (draftTarget == null) View.VISIBLE else View.GONE
             status.text = "已取消"; hint.text = "按住说话 · 松手输入"; return
         }
         if (pcm.size() < SAMPLE_RATE / 4) {
             streamingSpeech?.cancel(); streamingSpeech = null; pcm.clear()
-            preview.text = ""; preview.visibility = View.GONE
+            preview.text = ""; previewBox.visibility = View.GONE
             status.visibility = if (draftTarget == null) View.VISIBLE else View.GONE
             status.text = "说话时间太短，请重试"; return
         }
@@ -446,7 +460,7 @@ internal class VoiceInputPanel(private val host: Host) {
         recognizing = false
         hold.isEnabled = true
         val text = result.getOrNull().orEmpty().trim()
-        if (preview.visibility == View.VISIBLE) preview.text = text
+        if (previewBox.visibility == View.VISIBLE) preview.text = text
         if (result.isSuccess && text.isNotBlank() && target != null && destination === target && settings.correctionEnabled) {
             showCorrection(text, destination, request)
             return
@@ -464,6 +478,12 @@ internal class VoiceInputPanel(private val host: Host) {
         }
     }
 
+    fun showDeliveryProgress(message: String) {
+        if (!active || !submitting) return
+        if (draftTarget != null) candidateStatus.text = message
+        else status.text = message
+    }
+
     private fun submitText(target: Any, text: String, request: Int, review: Boolean) {
         submitting = true
         hold.isEnabled = false; sendButton.isEnabled = false
@@ -477,23 +497,37 @@ internal class VoiceInputPanel(private val host: Host) {
         } else if (!host.isIme) {
             status.text = "正在输入…"; hint.text = ""
         }
-        host.submit(target, text) { ok ->
+        host.submit(target, text) { result ->
             if (!active || destroyed || request != generation || host.destination !== target) return@submit
             submitting = false
             hold.isEnabled = true; sendButton.isEnabled = true; correctionWords.isEnabled = true
-            if (ok) {
+            if (result == InputDelivery.CONFIRMED) {
                 if (review) clearCorrection()
-                status.text = "已输入"; hint.text = "还可以继续说"
+                status.text = if (host.isIme) "已输入" else "Mac 已确认接收"
+                hint.text = "还可以继续说"
+                if (!host.isIme) {
+                    preview.text = text
+                    previewBox.visibility = View.VISIBLE
+                    bars.visibility = View.GONE
+                    previewScroll?.scrollTo(0, 0)
+                }
                 if (host.isIme && settings.autoReturnToPreviousIme) main.postDelayed({
                     if (!destroyed && active && request == generation && host.destination === target) host.returnToKeyboard(false)
                 }, 150)
+            } else if (!host.isIme) {
+                if (!review) showCorrection(text, target, request) else renderCandidates()
+                val message = when (result) {
+                    InputDelivery.UNCONFIRMED -> "Mac 未回复，请先确认是否已收到"
+                    InputDelivery.CHECKSUM_FAILED -> "校验失败，已重试三次"
+                    else -> "输入失败，请重试"
+                }
+                candidateStatus.visibility = View.VISIBLE
+                candidateStatus.isClickable = false
+                candidateStatus.text = message
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
             } else if (review) {
                 renderCandidates()
                 android.widget.Toast.makeText(context, "暂时无法输入，请重试", android.widget.Toast.LENGTH_SHORT).show()
-            } else if (!host.isIme) {
-                showCorrection(text, target, request)
-                candidateStatus.visibility = View.VISIBLE
-                candidateStatus.text = "输入失败，请重试"
             } else {
                 status.text = "无法输入到这里"; hint.text = "请选择输入框后重试"
             }
@@ -586,8 +620,8 @@ internal class VoiceInputPanel(private val host: Host) {
             if (restorePanel) renderPrimaryAction(false)
             if (restorePanel) {
                 correctionPanel.visibility = View.GONE; speechArea.visibility = View.VISIBLE
-                preview.text = ""; preview.visibility = View.GONE
-                bars.visibility = if (settings.keyboardHeightDp < 280) View.GONE else View.VISIBLE
+                preview.text = ""; previewBox.visibility = View.GONE
+                bars.visibility = if (host.isIme && settings.keyboardHeightDp < 280) View.GONE else View.VISIBLE
                 status.visibility = View.VISIBLE; hint.visibility = View.VISIBLE
                 hint.text = ""
             }
@@ -790,7 +824,7 @@ internal class VoiceInputPanel(private val host: Host) {
         submitting = false
         clearCorrection()
         streamingSpeech?.cancel(); streamingSpeech = null
-        if (::preview.isInitialized) { preview.text = ""; preview.visibility = View.GONE }
+        if (::preview.isInitialized) { preview.text = ""; previewBox.visibility = View.GONE }
         pendingSpeech?.cancel()
         pendingSpeech = null
         recognizing = false

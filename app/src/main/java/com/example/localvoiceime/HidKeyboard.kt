@@ -13,6 +13,8 @@ import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
 import java.util.concurrent.Future
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /** Owned by the visible launcher activity. Bluetooth callbacks and connection state run on main. */
 @SuppressLint("MissingPermission") // The owning activity checks and requests Bluetooth permissions.
@@ -49,6 +51,10 @@ internal class HidKeyboard(
     private var host: BluetoothDevice? = null
     private var sending: Future<*>? = null
     private var sendEpoch = 0
+    private class AwaitingAck(val device: BluetoothDevice) {
+        val reply = ArrayBlockingQueue<HidReportProtocol.Attempt>(1)
+    }
+    @Volatile private var awaitingAck: AwaitingAck? = null
     val connected get() = registered && host != null
     val ready get() = connected && sending == null
 
@@ -83,10 +89,36 @@ internal class HidKeyboard(
         }
 
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
-            if (!closed && device == host && type == BluetoothHidDevice.REPORT_TYPE_INPUT && id == 0.toByte()) {
-                runCatching { profile?.replyReport(device, type, id, ByteArray(8)) }
+            if (closed || device != host) return
+            val size = when {
+                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.KEYBOARD_ID -> 8
+                type == BluetoothHidDevice.REPORT_TYPE_OUTPUT && id.toInt() == HidReportProtocol.ACK_ID -> 1
+                else -> return
             }
+            runCatching { profile?.replyReport(device, type, id, ByteArray(size)) }
         }
+
+        override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) {
+            if (closed || device != host) return
+            val result = if (type == BluetoothHidDevice.REPORT_TYPE_OUTPUT) {
+                HidReportProtocol.parseAck(id.toInt(), data)
+            } else null
+            runCatching {
+                profile?.reportError(device, if (result != null) BluetoothHidDevice.ERROR_RSP_SUCCESS
+                    else BluetoothHidDevice.ERROR_RSP_INVALID_PARAM)
+            }
+            if (result != null) acceptAck(device, result)
+        }
+
+        override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) {
+            if (closed || device != host) return
+            HidReportProtocol.parseAck(reportId.toInt(), data)?.let { acceptAck(device, it) }
+        }
+    }
+
+    private fun acceptAck(device: BluetoothDevice, result: HidReportProtocol.Attempt) {
+        if (!visible) return
+        awaitingAck?.takeIf { it.device == device }?.reply?.offer(result)
     }
 
     private val listener = object : BluetoothProfile.ServiceListener {
@@ -222,38 +254,73 @@ internal class HidKeyboard(
         RIGHT_SHIFT_NEIGHBOR("/", 0x38),
     }
 
-    fun sendSetupKey(key: MacSetupKey, done: (Boolean) -> Unit): Boolean =
-        sendKeys(intArrayOf(key.usage), done)
+    fun sendSetupKey(key: MacSetupKey, done: (Boolean) -> Unit): Boolean = sendKey(key.usage, done)
 
     fun sendEditKey(newline: Boolean, done: (Boolean) -> Unit): Boolean =
-        sendKeys(intArrayOf(if (newline) 0x28 else 0x2a), done)
+        sendKey(if (newline) 0x28 else 0x2a, done)
 
-    fun send(text: String, done: (Boolean) -> Unit): Boolean =
-        sendKeys(HidTextFrame.encode(text), done)
+    private fun sendKey(key: Int, done: (Boolean) -> Unit): Boolean = enqueue({ hid, device, _ ->
+        if (writeKeys(hid, device, intArrayOf(key, 0), 8L)) InputDelivery.CONFIRMED else InputDelivery.FAILED
+    }, { done(it == InputDelivery.CONFIRMED) })
 
-    private fun sendKeys(keys: IntArray, done: (Boolean) -> Unit): Boolean {
+    fun send(text: String, progress: (String) -> Unit, done: (InputDelivery) -> Unit): Boolean {
+        val reports = HidReportProtocol.reportUsages(HidTextFrame.encode(text))
+        return enqueue({ hid, device, epoch ->
+            fun update(message: String) = main.post {
+                if (!closed && sendEpoch == epoch && sending != null) progress(message)
+            }
+            HidReportProtocol.deliver { retry ->
+                if (retry > 0) update("校验失败，正在重试 $retry/${HidReportProtocol.MAX_RETRIES}…")
+                val ack = AwaitingAck(device)
+                try {
+                    // Arm immediately before F19, including a reply received before F19 is released.
+                    val gap = minOf(4L + retry * 2L, 8L)
+                    if (!writeKeys(hid, device, reports, gap) { usage ->
+                        if (usage == HidTextFrame.END) awaitingAck = ack
+                    }) HidReportProtocol.Attempt.WRITE_FAILED
+                    else {
+                        update("等待 Mac 确认…")
+                        ack.reply.poll(2500, TimeUnit.MILLISECONDS) ?: HidReportProtocol.Attempt.TIMEOUT
+                    }
+                } finally {
+                    if (awaitingAck === ack) awaitingAck = null
+                }
+            }
+        }, done)
+    }
+
+    private fun writeKeys(
+        hid: BluetoothHidDevice, device: BluetoothDevice, reports: IntArray, gap: Long,
+        before: (Int) -> Unit = {},
+    ): Boolean {
+        val report = ByteArray(8)
+        for (usage in reports) {
+            if (Thread.currentThread().isInterrupted) return false
+            before(usage)
+            report[2] = usage.toByte()
+            if (!hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, report)) return false
+            Thread.sleep(gap)
+        }
+        return true
+    }
+
+    private fun enqueue(
+        operation: (BluetoothHidDevice, BluetoothDevice, Int) -> InputDelivery,
+        done: (InputDelivery) -> Unit,
+    ): Boolean {
         val hid = profile ?: return false
         val device = host ?: return false
         if (!ready || !visible) return false
         val epoch = ++sendEpoch
         sending = worker.submit {
-            val release = ByteArray(8)
-            val ok = runCatching {
-                for (key in keys) {
-                    if (Thread.currentThread().isInterrupted) return@runCatching false
-                    val press = ByteArray(8).apply { this[2] = key.toByte() }
-                    if (!hid.sendReport(device, 0, press)) return@runCatching false
-                    Thread.sleep(8)
-                    if (!hid.sendReport(device, 0, release)) return@runCatching false
-                    Thread.sleep(8)
-                }
-                true
-            }.getOrDefault(false)
-            if (!ok) runCatching { hid.sendReport(device, 0, release) }
+            val result = runCatching { operation(hid, device, epoch) }.getOrDefault(InputDelivery.FAILED)
+            if (result == InputDelivery.FAILED) runCatching {
+                hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8))
+            }
             main.post {
                 if (!closed && sendEpoch == epoch) {
                     sending = null
-                    done(ok)
+                    done(result)
                 }
             }
         }
@@ -262,6 +329,7 @@ internal class HidKeyboard(
 
     private fun stopSend() {
         sendEpoch++
+        awaitingAck = null
         sending?.cancel(true)
         sending = null
     }
@@ -280,12 +348,14 @@ internal class HidKeyboard(
 
     companion object {
         private const val WAITING_FOR_HOST = "等待连接：请在 Mac 的蓝牙设置中连接此手机"
-        // Standard eight-byte keyboard input report, including usages F13–F24.
+        // Keyboard input ID 1 and a distinct one-byte vendor output ID 3 (not keyboard LEDs).
         private val descriptor = intArrayOf(
-            0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x05, 0x07,
+            0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, HidReportProtocol.KEYBOARD_ID, 0x05, 0x07,
             0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
             0x75, 0x08, 0x95, 0x01, 0x81, 0x01,
-            0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x73, 0x19, 0x00, 0x29, 0x73, 0x81, 0x00, 0xc0,
+            0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x73, 0x19, 0x00, 0x29, 0x73, 0x81, 0x00,
+            0x06, 0x00, 0xff, 0x09, 0x01, 0x85, HidReportProtocol.ACK_ID,
+            0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02, 0xc0,
         ).map(Int::toByte).toByteArray()
     }
 }

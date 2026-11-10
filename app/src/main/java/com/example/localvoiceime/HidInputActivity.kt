@@ -37,19 +37,19 @@ class HidInputActivity : Activity() {
         override val context get() = this@HidInputActivity
         override val destination get() = keyboard?.connectionToken?.takeIf { visible && !settingsOpen }
 
-        override fun submit(target: Any, text: String, done: (Boolean) -> Unit) {
+        override fun submit(target: Any, text: String, done: (InputDelivery) -> Unit) {
             val session = keyboard
-            if (session == null || destination !== target || !session.ready) { done(false); return }
+            if (session == null || destination !== target || !session.ready) { done(InputDelivery.FAILED); return }
             if (text.toByteArray(Charsets.UTF_8).size > HidTextFrame.MAX_BYTES) {
                 android.widget.Toast.makeText(context, "这段文字太长，请缩短后发送", android.widget.Toast.LENGTH_SHORT).show()
-                done(false); return
+                done(InputDelivery.FAILED); return
             }
-            transmit({ callback -> session.send(text, callback) }, done)
+            transmit(InputDelivery.FAILED, { callback -> session.send(text, panel::showDeliveryProgress, callback) }, done)
         }
 
         override fun editKey(newline: Boolean) {
             val session = keyboard ?: return
-            if (destination != null && session.ready) transmit({ callback -> session.sendEditKey(newline, callback) }) { ok ->
+            if (destination != null && session.ready) transmit(false, { callback -> session.sendEditKey(newline, callback) }) { ok ->
                 if (!ok) android.widget.Toast.makeText(context, "按键未发送，请检查连接", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
@@ -210,14 +210,14 @@ class HidInputActivity : Activity() {
     private fun sendSetupKey(key: HidKeyboard.MacSetupKey) {
         val session = keyboard ?: return
         if (!settingsOpen || !session.ready) return
-        transmit({ callback -> session.sendSetupKey(key, callback) }) { ok ->
+        transmit(false, { callback -> session.sendSetupKey(key, callback) }) { ok ->
             settingsStatus.text = if (ok) "已发送 ${key.label}，请查看 Mac 上的提示" else "按键发送失败，请检查连接"
         }
     }
 
-    private fun transmit(start: ((Boolean) -> Unit) -> Boolean, done: (Boolean) -> Unit) {
-        val session = keyboard ?: run { done(false); return }
-        if (sending) { done(false); return }
+    private fun <T> transmit(failure: T, start: ((T) -> Unit) -> Boolean, done: (T) -> Unit) {
+        val session = keyboard ?: run { done(failure); return }
+        if (sending) { done(failure); return }
         sending = runCatching {
             start { ok ->
                 if (visible && keyboard === session) {
@@ -227,7 +227,7 @@ class HidInputActivity : Activity() {
                 }
             }
         }.getOrDefault(false)
-        if (!sending) done(false)
+        if (!sending) done(failure)
         renderSettings()
     }
 
