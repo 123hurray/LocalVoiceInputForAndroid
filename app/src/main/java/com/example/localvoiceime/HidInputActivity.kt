@@ -23,10 +23,12 @@ class HidInputActivity : Activity() {
     private var visible = false
     private var permissionRequested = false
     private var settingsOpen = false
+    private var mouseOpen = false
     private var sending = false
     private var displayedConnection: Any? = null
     private lateinit var panel: VoiceInputPanel
     private lateinit var home: View
+    private lateinit var mouse: HidMousePanel
     private lateinit var settings: ScrollView
     private lateinit var settingsStatus: TextView
     private lateinit var retry: Button
@@ -35,7 +37,7 @@ class HidInputActivity : Activity() {
 
     private val inputHost = object : VoiceInputPanel.Host {
         override val context get() = this@HidInputActivity
-        override val destination get() = keyboard?.connectionToken?.takeIf { visible && !settingsOpen }
+        override val destination get() = keyboard?.connectionToken?.takeIf { visible && !settingsOpen && !mouseOpen }
 
         override fun submit(target: Any, text: String, done: (InputDelivery) -> Unit) {
             val session = keyboard
@@ -54,6 +56,7 @@ class HidInputActivity : Activity() {
             }
         }
 
+        override fun switchToMouse() { showMouse(true) }
         override fun openSettings() { showSettings(true) }
         override fun openModelSettings() {
             startActivity(Intent(context, SettingsActivity::class.java))
@@ -64,12 +67,20 @@ class HidInputActivity : Activity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) {
-                if (settingsOpen) showSettings(false) else finish()
+                if (settingsOpen) showSettings(false) else if (mouseOpen) showMouse(false) else finish()
             }
         }
         adapter = getSystemService(BluetoothManager::class.java)?.adapter
         panel = VoiceInputPanel(inputHost)
         home = panel.createView()
+        mouse = HidMousePanel(this,
+            send = { buttons, dx, dy, wheel, click ->
+                if (visible && mouseOpen && !settingsOpen) keyboard?.sendMouse(buttons, dx, dy, wheel, click)
+            },
+            release = { keyboard?.resetMouse() },
+            openVoice = { showMouse(false) },
+            openSettings = { showSettings(true) },
+        )
 
         val settingsBody = column()
         settingsBody.addRow(action("‹ 返回语音输入") { showSettings(false) })
@@ -92,6 +103,7 @@ class HidInputActivity : Activity() {
         val root = FrameLayout(this).apply {
             setBackgroundColor(VoiceStyle.background)
             addView(home, home.layoutParams)
+            addView(mouse, FrameLayout.LayoutParams(-1, -1))
             addView(settings, FrameLayout.LayoutParams(-1, -1))
             setOnApplyWindowInsetsListener { view, insets ->
                 @Suppress("DEPRECATION")
@@ -114,6 +126,7 @@ class HidInputActivity : Activity() {
         visible = false
         panel.deactivate()
         displayedConnection = null
+        mouse.reset()
         keyboard?.pause()
         sending = false
         super.onStop()
@@ -128,16 +141,28 @@ class HidInputActivity : Activity() {
 
     @Deprecated("Legacy Android back callback")
     override fun onBackPressed() {
-        if (settingsOpen) showSettings(false) else super.onBackPressed()
+        if (settingsOpen) showSettings(false) else if (mouseOpen) showMouse(false) else super.onBackPressed()
     }
 
     private fun showSettings(open: Boolean) {
         if (sending) return
         settingsOpen = open
+        refreshPage()
+    }
+
+    private fun showMouse(open: Boolean) {
+        if (sending || settingsOpen || mouseOpen == open) return
+        mouseOpen = open
+        refreshPage()
+    }
+
+    private fun refreshPage() {
         panel.deactivate()
+        mouse.reset()
         displayedConnection = null
-        home.visibility = if (open) View.GONE else View.VISIBLE
-        settings.visibility = if (open) View.VISIBLE else View.GONE
+        home.visibility = if (!settingsOpen && !mouseOpen) View.VISIBLE else View.GONE
+        mouse.visibility = if (!settingsOpen && mouseOpen) View.VISIBLE else View.GONE
+        settings.visibility = if (settingsOpen) View.VISIBLE else View.GONE
         keyboard?.refresh()
         updateConnection(keyboard?.status ?: settingsStatus.text.toString())
     }
@@ -234,8 +259,11 @@ class HidInputActivity : Activity() {
     private fun updateConnection(message: String) {
         val token = inputHost.destination
         settingsStatus.text = message
-        panel.setConnection(if (keyboard?.connected == true) message else "未连接")
-        if (visible && !settingsOpen) {
+        val connected = keyboard?.connected == true
+        val connectionLabel = if (connected) message else "未连接"
+        panel.setConnection(connectionLabel)
+        mouse.setConnection(connectionLabel, connected && visible && mouseOpen && !settingsOpen)
+        if (visible && !settingsOpen && !mouseOpen) {
             if (displayedConnection !== token) {
                 sending = false
                 panel.deactivate()

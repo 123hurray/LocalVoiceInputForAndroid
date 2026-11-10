@@ -13,6 +13,12 @@ class HidReportProtocolTest {
         assertTrue(reports.size < keys.size * 2)
     }
 
+    @Test fun mouseReportsUseIndependentIdAndSignedRelativeAxes() {
+        assertEquals(2, HidReportProtocol.MOUSE_ID)
+        assertArrayEquals(byteArrayOf(3, 127, -127, -1), HidReportProtocol.mouseReport(3, 400, -400, -1))
+        assertArrayEquals(byteArrayOf(0, 0, 0, 0), HidReportProtocol.mouseReport(0, 0, 0, 0))
+    }
+
     @Test fun onlyReportThreeWithOneRecognizedByteIsAnAcknowledgement() {
         assertEquals(HidReportProtocol.Attempt.ACCEPTED, HidReportProtocol.parseAck(3, byteArrayOf(1)))
         assertEquals(HidReportProtocol.Attempt.REJECTED, HidReportProtocol.parseAck(3, byteArrayOf(2)))

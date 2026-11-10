@@ -33,6 +33,7 @@ internal class VoiceInputPanel(private val host: Host) {
         val isIme: Boolean get() = false
         fun submit(target: Any, text: String, done: (InputDelivery) -> Unit)
         fun editKey(newline: Boolean)
+        fun switchToMouse() {}
         fun openSettings()
         fun openModelSettings()
         fun returnToKeyboard(showPicker: Boolean) {}
@@ -251,6 +252,14 @@ internal class VoiceInputPanel(private val host: Host) {
                     visibility = View.GONE
                     setOnClickListener { confirmCorrection() }
                 }
+                if (!host.isIme) addView(ImageButton(context).apply {
+                    setImageResource(R.drawable.ic_hid_mouse)
+                    imageTintList = android.content.res.ColorStateList.valueOf(VoiceStyle.muted)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    contentDescription = "切换到鼠标"
+                    setOnClickListener { if (!submitting) host.switchToMouse() }
+                }, LinearLayout.LayoutParams(dp(48), dp(48)))
                 addView(hold, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
                 addView(sendButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
                 fun editButton(icon: Int, description: String, newline: Boolean) = ImageButton(context).apply {

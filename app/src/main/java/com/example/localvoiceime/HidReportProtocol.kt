@@ -4,9 +4,14 @@ internal enum class InputDelivery { CONFIRMED, FAILED, UNCONFIRMED, CHECKSUM_FAI
 
 internal object HidReportProtocol {
     const val KEYBOARD_ID = 1
+    const val MOUSE_ID = 2
     const val ACK_ID = 3
     const val MAX_RETRIES = 3
     enum class Attempt { ACCEPTED, REJECTED, TIMEOUT, WRITE_FAILED }
+
+    fun mouseReport(buttons: Int, dx: Int, dy: Int, wheel: Int): ByteArray =
+        byteArrayOf((buttons and 0x07).toByte(), dx.coerceIn(-127, 127).toByte(),
+            dy.coerceIn(-127, 127).toByte(), wheel.coerceIn(-127, 127).toByte())
 
     fun parseAck(id: Int, payload: ByteArray): Attempt? =
         if (id != ACK_ID || payload.size != 1) null else when (payload[0].toInt()) {

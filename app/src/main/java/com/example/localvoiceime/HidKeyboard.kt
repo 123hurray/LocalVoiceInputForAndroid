@@ -51,6 +51,7 @@ internal class HidKeyboard(
     private var host: BluetoothDevice? = null
     private var sending: Future<*>? = null
     private var sendEpoch = 0
+    @Volatile private var mouseEpoch = 0
     private class AwaitingAck(val device: BluetoothDevice) {
         val reply = ArrayBlockingQueue<HidReportProtocol.Attempt>(1)
     }
@@ -92,6 +93,7 @@ internal class HidKeyboard(
             if (closed || device != host) return
             val size = when {
                 type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.KEYBOARD_ID -> 8
+                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.MOUSE_ID -> 4
                 type == BluetoothHidDevice.REPORT_TYPE_OUTPUT && id.toInt() == HidReportProtocol.ACK_ID -> 1
                 else -> return
             }
@@ -164,6 +166,7 @@ internal class HidKeyboard(
     }
 
     fun pause() {
+        resetMouse()
         visible = false
         main.removeCallbacks(refreshTask)
         stopSend()
@@ -185,7 +188,7 @@ internal class HidKeyboard(
             runCatching {
                 hid.registerApp(
                     BluetoothHidDeviceAppSdpSettings("LocalVoice HID", "Local voice text", "LocalVoice",
-                        BluetoothHidDevice.SUBCLASS1_KEYBOARD, descriptor),
+                        BluetoothHidDevice.SUBCLASS1_COMBO, descriptor),
                     null, null, Executor { main.post(it) }, callback,
                 )
             }
@@ -222,6 +225,7 @@ internal class HidKeyboard(
     }
 
     private fun clearHost() {
+        mouseEpoch++
         stopSend()
         host = null
         connectionToken = null
@@ -247,6 +251,37 @@ internal class HidKeyboard(
         preferences.edit().putString("last_address", lastAddress).apply()
         val name = runCatching { device.name ?: device.address }.getOrDefault("接收设备")
         publish("已连接：$name", force = true)
+    }
+
+    fun sendMouse(buttons: Int, dx: Int, dy: Int, wheel: Int, click: Int = 0) {
+        val hid = profile ?: return
+        val device = host ?: return
+        if (!visible || !ready) return
+        val epoch = mouseEpoch
+        worker.execute {
+            if (epoch != mouseEpoch) return@execute
+            runCatching {
+                if (click != 0) {
+                    hid.sendReport(device, HidReportProtocol.MOUSE_ID, HidReportProtocol.mouseReport(buttons or click, 0, 0, 0))
+                    Thread.sleep(16)
+                }
+                if (epoch == mouseEpoch) {
+                    hid.sendReport(device, HidReportProtocol.MOUSE_ID, HidReportProtocol.mouseReport(buttons, dx, dy, wheel))
+                }
+            }
+        }
+    }
+
+    fun resetMouse() {
+        val epoch = ++mouseEpoch
+        val hid = profile ?: return
+        val device = host ?: return
+        if (!visible || closed) return
+        worker.execute {
+            if (epoch == mouseEpoch) runCatching {
+                hid.sendReport(device, HidReportProtocol.MOUSE_ID, ByteArray(4))
+            }
+        }
     }
 
     enum class MacSetupKey(val label: String, val usage: Int) {
@@ -348,7 +383,7 @@ internal class HidKeyboard(
 
     companion object {
         private const val WAITING_FOR_HOST = "等待连接：请在 Mac 的蓝牙设置中连接此手机"
-        // Keyboard input ID 1 and a distinct one-byte vendor output ID 3 (not keyboard LEDs).
+        // ID 1: keyboard input. ID 2: relative mouse input. ID 3: one-byte vendor output.
         private val descriptor = intArrayOf(
             0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, HidReportProtocol.KEYBOARD_ID, 0x05, 0x07,
             0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
@@ -356,6 +391,14 @@ internal class HidKeyboard(
             0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x73, 0x19, 0x00, 0x29, 0x73, 0x81, 0x00,
             0x06, 0x00, 0xff, 0x09, 0x01, 0x85, HidReportProtocol.ACK_ID,
             0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02, 0xc0,
+            // Mouse application, pointer physical collection, three buttons and signed X/Y/wheel.
+            0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, HidReportProtocol.MOUSE_ID,
+            0x09, 0x01, 0xa1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01,
+            0x75, 0x01, 0x95, 0x03, 0x81, 0x02,
+            0x75, 0x05, 0x95, 0x01, 0x81, 0x03,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38,
+            0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, 0xc0, 0xc0,
         ).map(Int::toByte).toByteArray()
     }
 }
