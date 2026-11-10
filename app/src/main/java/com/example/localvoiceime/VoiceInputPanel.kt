@@ -208,7 +208,7 @@ internal class VoiceInputPanel(private val host: Host) {
                         visibility = View.GONE
                         preview.text = ""; previewBox.visibility = View.GONE
                         status.text = "按住，说出你想写的"
-                        hint.text = "滑动中间区域移动 Mac 指针"
+                        this@VoiceInputPanel.hint.text = "滑动中间区域移动 Mac 指针"
                     }
                 }
                 dismissPreview = closePreview
