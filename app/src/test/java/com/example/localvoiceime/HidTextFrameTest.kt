@@ -10,7 +10,7 @@ class HidTextFrameTest {
             0x04, 0x05, 0x06, 0x07, 0x08, 0x09)
         val body = "41e4b8adf09f99820a28d71a81"
         assertArrayEquals(
-            intArrayOf(0x6c) + body.map { usages[it.digitToInt(16)] }.toIntArray() + 0x6d,
+            intArrayOf(0x6d) + body.map { usages[it.digitToInt(16)] }.toIntArray() + 0x6e,
             HidTextFrame.encode("A中🙂\n"),
         )
     }

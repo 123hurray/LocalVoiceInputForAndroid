@@ -4,8 +4,8 @@ import java.util.zip.CRC32
 
 /** US keyboard usages. Wire format: F18, lowercase UTF-8 hex, CRC32 hex, F19. */
 internal object HidTextFrame {
-    const val START = 0x6c
-    const val END = 0x6d
+    const val START = 0x6d
+    const val END = 0x6e
     const val MAX_BYTES = 1024
     private const val HEX = "0123456789abcdef"
 
