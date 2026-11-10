@@ -13,6 +13,34 @@ class HidReportProtocolTest {
         assertTrue(reports.size < keys.size * 2)
     }
 
+    @Test fun legacyAndCompositeDescriptorsDoNotMixNumberedAndUnnumberedReports() {
+        fun fields(profile: HidProfile): Map<Pair<Int, Int>, Int> {
+            val bytes = HidReportProtocol.descriptor(profile)
+            val bits = mutableMapOf<Pair<Int, Int>, Int>()
+            var offset = 0; var id = 0; var size = 0; var count = 0
+            while (offset < bytes.size) {
+                val prefix = bytes[offset++].toInt() and 0xff
+                val length = intArrayOf(0, 1, 2, 4)[prefix and 3]
+                var value = 0
+                repeat(length) { i -> value = value or ((bytes[offset++].toInt() and 0xff) shl (8 * i)) }
+                when (val item = prefix and 0xfc) {
+                    0x84 -> id = value
+                    0x74 -> size = value
+                    0x94 -> count = value
+                    0x80, 0x90 -> {
+                        val key = id to item
+                        bits[key] = bits.getOrDefault(key, 0) + size * count
+                    }
+                }
+            }
+            return bits
+        }
+        assertEquals(0, HidProfile.LEGACY_KEYBOARD.keyboardId)
+        assertEquals(mapOf((0 to 0x80) to 64), fields(HidProfile.LEGACY_KEYBOARD))
+        assertEquals(1, HidProfile.COMPOSITE.keyboardId)
+        assertEquals(mapOf((1 to 0x80) to 64, (2 to 0x80) to 32, (3 to 0x90) to 8), fields(HidProfile.COMPOSITE))
+    }
+
     @Test fun mouseReportsUseIndependentIdAndSignedRelativeAxes() {
         assertEquals(2, HidReportProtocol.MOUSE_ID)
         assertArrayEquals(byteArrayOf(3, 127, -127, -1), HidReportProtocol.mouseReport(3, 400, -400, -1))

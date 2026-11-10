@@ -510,9 +510,13 @@ internal class VoiceInputPanel(private val host: Host) {
             if (!active || destroyed || request != generation || host.destination !== target) return@submit
             submitting = false
             hold.isEnabled = true; sendButton.isEnabled = true; correctionWords.isEnabled = true
-            if (result == InputDelivery.CONFIRMED) {
+            if (result == InputDelivery.CONFIRMED || result == InputDelivery.SENT_WITHOUT_ACK) {
                 if (review) clearCorrection()
-                status.text = if (host.isIme) "已输入" else "Mac 已确认接收"
+                status.text = when {
+                    host.isIme -> "已输入"
+                    result == InputDelivery.SENT_WITHOUT_ACK -> "已发出（兼容键盘，无回执）"
+                    else -> "Mac 已确认接收"
+                }
                 hint.text = "还可以继续说"
                 if (!host.isIme) {
                     preview.text = text

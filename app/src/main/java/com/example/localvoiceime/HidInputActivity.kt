@@ -3,6 +3,7 @@ package com.example.localvoiceime
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Intent
@@ -26,6 +27,11 @@ class HidInputActivity : Activity() {
     private var mouseOpen = false
     private var sending = false
     private var displayedConnection: Any? = null
+    private var mode = HidProfile.LEGACY_KEYBOARD
+    private var formatConfirmed = true
+    private val hidOptions get() = getSharedPreferences("hid_format", MODE_PRIVATE)
+    private lateinit var formatButton: Button
+    private lateinit var confirmFormat: Button
     private lateinit var panel: VoiceInputPanel
     private lateinit var home: View
     private lateinit var mouse: HidMousePanel
@@ -37,7 +43,7 @@ class HidInputActivity : Activity() {
 
     private val inputHost = object : VoiceInputPanel.Host {
         override val context get() = this@HidInputActivity
-        override val destination get() = keyboard?.connectionToken?.takeIf { visible && !settingsOpen && !mouseOpen }
+        override val destination get() = keyboard?.connectionToken?.takeIf { visible && formatConfirmed && !settingsOpen && !mouseOpen }
 
         override fun submit(target: Any, text: String, done: (InputDelivery) -> Unit) {
             val session = keyboard
@@ -71,6 +77,8 @@ class HidInputActivity : Activity() {
             }
         }
         adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        mode = if (hidOptions.getBoolean("composite", false)) HidProfile.COMPOSITE else HidProfile.LEGACY_KEYBOARD
+        formatConfirmed = hidOptions.getBoolean("format_confirmed", !mode.composite)
         panel = VoiceInputPanel(inputHost)
         home = panel.createView()
         mouse = HidMousePanel(this,
@@ -91,6 +99,18 @@ class HidInputActivity : Activity() {
         discover = action("让 Mac 发现此手机", click = ::discoverable)
         settingsBody.addRow(retry)
         settingsBody.addRow(discover)
+        formatButton = action("", click = ::chooseFormat)
+        confirmFormat = action("已在 Mac 忽略旧设备并重新配对") {
+            if (keyboard?.connected == true) {
+                formatConfirmed = true
+                hidOptions.edit().putBoolean("format_confirmed", true).apply()
+                keyboard?.allowReconnect = true
+                updateConnection(keyboard?.status.orEmpty())
+            }
+        }
+        settingsBody.addRow(formatButton)
+        settingsBody.addRow(confirmFormat)
+        settingsBody.addRow(label("兼容键盘去掉报告前缀；鼠标和语音回执需要复合模式。切换后请在 Mac 忽略旧设备，再重新配对。", 14f, VoiceStyle.muted))
         settingsBody.addRow(label("在 Mac 的「系统设置 → 蓝牙」连接此手机。", 14f, VoiceStyle.muted))
         settingsBody.addRow(label("Mac 键盘识别", 18f))
         settingsBody.addRow(label("按 Mac「键盘设置助理」的当前提示点选，键盘类型选 ANSI（美国）。", 14f, VoiceStyle.muted))
@@ -151,6 +171,10 @@ class HidInputActivity : Activity() {
     }
 
     private fun showMouse(open: Boolean) {
+        if (open && !mode.composite) {
+            android.widget.Toast.makeText(this, "鼠标需要在设置中切换到键鼠与回执模式", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         if (sending || settingsOpen || mouseOpen == open) return
         mouseOpen = open
         refreshPage()
@@ -165,6 +189,29 @@ class HidInputActivity : Activity() {
         settings.visibility = if (settingsOpen) View.VISIBLE else View.GONE
         keyboard?.refresh()
         updateConnection(keyboard?.status ?: settingsStatus.text.toString())
+    }
+
+    private fun chooseFormat() {
+        if (sending) return
+        val modes = HidProfile.entries
+        AlertDialog.Builder(this)
+            .setTitle("蓝牙报告格式")
+            .setItems(arrayOf("兼容键盘（无编号、无回执）", "键鼠与回执（需重新配对）")) { _, position ->
+                val selected = modes[position]
+                if (selected == mode) return@setItems
+                mode = selected
+                formatConfirmed = false
+                hidOptions.edit().putBoolean("composite", mode.composite).putBoolean("format_confirmed", false).apply()
+                mouseOpen = false
+                panel.deactivate()
+                mouse.reset()
+                displayedConnection = null
+                keyboard?.close()
+                keyboard = null
+                enableMode(false)
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun has(permission: String) = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -193,7 +240,7 @@ class HidInputActivity : Activity() {
             updateConnection(current.status)
             return
         }
-        val session = HidKeyboard(this, radio) { message ->
+        val session = HidKeyboard(this, radio, mode, allowReconnect = formatConfirmed) { message ->
             if (visible) updateConnection(message)
         }
         keyboard = session
@@ -234,7 +281,7 @@ class HidInputActivity : Activity() {
 
     private fun sendSetupKey(key: HidKeyboard.MacSetupKey) {
         val session = keyboard ?: return
-        if (!settingsOpen || !session.ready) return
+        if (!settingsOpen || !formatConfirmed || !session.ready) return
         transmit(false, { callback -> session.sendSetupKey(key, callback) }) { ok ->
             settingsStatus.text = if (ok) "已发送 ${key.label}，请查看 Mac 上的提示" else "按键发送失败，请检查连接"
         }
@@ -258,11 +305,11 @@ class HidInputActivity : Activity() {
 
     private fun updateConnection(message: String) {
         val token = inputHost.destination
-        settingsStatus.text = message
+        settingsStatus.text = if (formatConfirmed) message else "$message\n请在 Mac 忽略旧设备、重新配对，然后在此确认。"
         val connected = keyboard?.connected == true
-        val connectionLabel = if (connected) message else "未连接"
+        val connectionLabel = if (!connected) "未连接" else if (!formatConfirmed) "已连接 · 待确认格式" else message
         panel.setConnection(connectionLabel)
-        mouse.setConnection(connectionLabel, connected && visible && mouseOpen && !settingsOpen)
+        mouse.setConnection(connectionLabel, connected && formatConfirmed && visible && mouseOpen && !settingsOpen)
         if (visible && !settingsOpen && !mouseOpen) {
             if (displayedConnection !== token) {
                 sending = false
@@ -277,7 +324,11 @@ class HidInputActivity : Activity() {
     private fun renderSettings() {
         discover.isEnabled = !sending && keyboard?.registered == true
         retry.isEnabled = !sending
-        setupButtons.forEach { it.isEnabled = !sending && keyboard?.ready == true }
+        formatButton.text = if (mode.composite) "格式：键鼠与回执" else "格式：兼容键盘"
+        formatButton.isEnabled = !sending
+        confirmFormat.visibility = if (formatConfirmed) View.GONE else View.VISIBLE
+        confirmFormat.isEnabled = !sending && keyboard?.connected == true
+        setupButtons.forEach { it.isEnabled = formatConfirmed && !sending && keyboard?.ready == true }
     }
 
     private fun column() = LinearLayout(this).apply {

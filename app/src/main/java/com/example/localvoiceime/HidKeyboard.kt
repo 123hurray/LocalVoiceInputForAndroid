@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit
 internal class HidKeyboard(
     private val context: Context,
     private val adapter: BluetoothAdapter,
+    val mode: HidProfile,
+    var allowReconnect: Boolean,
     private val changed: (String) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -52,6 +54,7 @@ internal class HidKeyboard(
     private var sending: Future<*>? = null
     private var sendEpoch = 0
     @Volatile private var mouseEpoch = 0
+    private var mouseMayBePressed = false
     private class AwaitingAck(val device: BluetoothDevice) {
         val reply = ArrayBlockingQueue<HidReportProtocol.Attempt>(1)
     }
@@ -92,16 +95,16 @@ internal class HidKeyboard(
         override fun onGetReport(device: BluetoothDevice, type: Byte, id: Byte, bufferSize: Int) {
             if (closed || device != host) return
             val size = when {
-                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.KEYBOARD_ID -> 8
-                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.MOUSE_ID -> 4
-                type == BluetoothHidDevice.REPORT_TYPE_OUTPUT && id.toInt() == HidReportProtocol.ACK_ID -> 1
+                type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == mode.keyboardId -> 8
+                mode.composite && type == BluetoothHidDevice.REPORT_TYPE_INPUT && id.toInt() == HidReportProtocol.MOUSE_ID -> 4
+                mode.composite && type == BluetoothHidDevice.REPORT_TYPE_OUTPUT && id.toInt() == HidReportProtocol.ACK_ID -> 1
                 else -> return
             }
             runCatching { profile?.replyReport(device, type, id, ByteArray(size)) }
         }
 
         override fun onSetReport(device: BluetoothDevice, type: Byte, id: Byte, data: ByteArray) {
-            if (closed || device != host) return
+            if (!mode.composite || closed || device != host) return
             val result = if (type == BluetoothHidDevice.REPORT_TYPE_OUTPUT) {
                 HidReportProtocol.parseAck(id.toInt(), data)
             } else null
@@ -113,7 +116,7 @@ internal class HidKeyboard(
         }
 
         override fun onInterruptData(device: BluetoothDevice, reportId: Byte, data: ByteArray) {
-            if (closed || device != host) return
+            if (!mode.composite || closed || device != host) return
             HidReportProtocol.parseAck(reportId.toInt(), data)?.let { acceptAck(device, it) }
         }
     }
@@ -187,8 +190,12 @@ internal class HidKeyboard(
             registrationRequestedAt = now
             runCatching {
                 hid.registerApp(
-                    BluetoothHidDeviceAppSdpSettings("LocalVoice HID", "Local voice text", "LocalVoice",
-                        BluetoothHidDevice.SUBCLASS1_COMBO, descriptor),
+                    BluetoothHidDeviceAppSdpSettings(
+                        if (mode.composite) "LocalVoice HID Combo" else "LocalVoice HID",
+                        "Local voice input", "LocalVoice",
+                        if (mode.composite) BluetoothHidDevice.SUBCLASS1_COMBO else BluetoothHidDevice.SUBCLASS1_KEYBOARD,
+                        HidReportProtocol.descriptor(mode),
+                    ),
                     null, null, Executor { main.post(it) }, callback,
                 )
             }
@@ -210,7 +217,7 @@ internal class HidKeyboard(
             }
         if (connected != null) acceptHost(connected)
         if (host != null) return
-        if (known != null && now >= reconnectAfter) {
+        if (allowReconnect && known != null && now >= reconnectAfter) {
             val state = runCatching { hid.getConnectionState(known) }.getOrNull()
             if (state == BluetoothProfile.STATE_DISCONNECTED) {
                 reconnectAfter = Long.MAX_VALUE
@@ -226,6 +233,7 @@ internal class HidKeyboard(
 
     private fun clearHost() {
         mouseEpoch++
+        mouseMayBePressed = false
         stopSend()
         host = null
         connectionToken = null
@@ -256,7 +264,8 @@ internal class HidKeyboard(
     fun sendMouse(buttons: Int, dx: Int, dy: Int, wheel: Int, click: Int = 0) {
         val hid = profile ?: return
         val device = host ?: return
-        if (!visible || !ready) return
+        if (!mode.composite || !visible || !ready) return
+        mouseMayBePressed = mouseMayBePressed || buttons != 0 || click != 0
         val epoch = mouseEpoch
         worker.execute {
             if (epoch != mouseEpoch) return@execute
@@ -274,6 +283,9 @@ internal class HidKeyboard(
 
     fun resetMouse() {
         val epoch = ++mouseEpoch
+        val release = mouseMayBePressed
+        mouseMayBePressed = false
+        if (!mode.composite || !release) return
         val hid = profile ?: return
         val device = host ?: return
         if (!visible || closed) return
@@ -301,6 +313,9 @@ internal class HidKeyboard(
     fun send(text: String, progress: (String) -> Unit, done: (InputDelivery) -> Unit): Boolean {
         val reports = HidReportProtocol.reportUsages(HidTextFrame.encode(text))
         return enqueue({ hid, device, epoch ->
+            if (!mode.composite) return@enqueue if (writeKeys(hid, device, reports, 4L)) {
+                InputDelivery.SENT_WITHOUT_ACK
+            } else InputDelivery.FAILED
             fun update(message: String) = main.post {
                 if (!closed && sendEpoch == epoch && sending != null) progress(message)
             }
@@ -333,7 +348,7 @@ internal class HidKeyboard(
             if (Thread.currentThread().isInterrupted) return false
             before(usage)
             report[2] = usage.toByte()
-            if (!hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, report)) return false
+            if (!hid.sendReport(device, mode.keyboardId, report)) return false
             Thread.sleep(gap)
         }
         return true
@@ -350,7 +365,7 @@ internal class HidKeyboard(
         sending = worker.submit {
             val result = runCatching { operation(hid, device, epoch) }.getOrDefault(InputDelivery.FAILED)
             if (result == InputDelivery.FAILED) runCatching {
-                hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8))
+                hid.sendReport(device, mode.keyboardId, ByteArray(8))
             }
             main.post {
                 if (!closed && sendEpoch == epoch) {
@@ -383,22 +398,5 @@ internal class HidKeyboard(
 
     companion object {
         private const val WAITING_FOR_HOST = "等待连接：请在 Mac 的蓝牙设置中连接此手机"
-        // ID 1: keyboard input. ID 2: relative mouse input. ID 3: one-byte vendor output.
-        private val descriptor = intArrayOf(
-            0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, HidReportProtocol.KEYBOARD_ID, 0x05, 0x07,
-            0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
-            0x75, 0x08, 0x95, 0x01, 0x81, 0x01,
-            0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x73, 0x19, 0x00, 0x29, 0x73, 0x81, 0x00,
-            0x06, 0x00, 0xff, 0x09, 0x01, 0x85, HidReportProtocol.ACK_ID,
-            0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02, 0xc0,
-            // Mouse application, pointer physical collection, three buttons and signed X/Y/wheel.
-            0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, HidReportProtocol.MOUSE_ID,
-            0x09, 0x01, 0xa1, 0x00,
-            0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01,
-            0x75, 0x01, 0x95, 0x03, 0x81, 0x02,
-            0x75, 0x05, 0x95, 0x01, 0x81, 0x03,
-            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38,
-            0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, 0xc0, 0xc0,
-        ).map(Int::toByte).toByteArray()
     }
 }
