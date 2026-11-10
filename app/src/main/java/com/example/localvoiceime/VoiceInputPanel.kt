@@ -33,7 +33,7 @@ internal class VoiceInputPanel(private val host: Host) {
         val isIme: Boolean get() = false
         fun submit(target: Any, text: String, done: (InputDelivery) -> Unit)
         fun editKey(newline: Boolean)
-        fun switchToMouse() {}
+        val pointerControls: HidPointerControls? get() = null
         fun openSettings()
         fun openModelSettings()
         fun returnToKeyboard(showPicker: Boolean) {}
@@ -76,6 +76,7 @@ internal class VoiceInputPanel(private val host: Host) {
     private lateinit var preview: TextView
     private lateinit var previewBox: View
     private var previewScroll: ScrollView? = null
+    private var dismissPreview: Button? = null
     private var streamingSpeech: SpeechEngine.StreamingSpeech? = null
     private lateinit var inputPanel: LinearLayout
     private val main = Handler(Looper.getMainLooper())
@@ -100,6 +101,7 @@ internal class VoiceInputPanel(private val host: Host) {
             inputPanel = this
             layoutParams = FrameLayout.LayoutParams(-1, if (host.isIme) dp(VoiceSettingsStore(context).load().keyboardHeightDp) else -1)
             orientation = LinearLayout.VERTICAL
+            if (!host.isIme) isMotionEventSplittingEnabled = true
             setPadding(0, dp(8), 0, 0)
             setBackgroundColor(VoiceStyle.background)
             addView(LinearLayout(context).apply {
@@ -161,39 +163,57 @@ internal class VoiceInputPanel(private val host: Host) {
                 setPadding(dp(20), 0, dp(20), dp(14))
             }
 
-            // The compact button is only a visual cue. The entire lower panel receives gestures.
+            // In the IME the whole panel is a voice gesture; the HID surface is a trackpad.
             speechArea = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 setPadding(dp(20), 0, dp(20), dp(8))
                 setBackgroundColor(VoiceStyle.background)
-                contentDescription = "按住此区域说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-                setOnTouchListener { view, event ->
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> {
-                            if (!recognizing) {
-                                view.parent.requestDisallowInterceptTouchEvent(true)
-                                downY = event.rawY; cancelGesture = false
-                                startRecordingOrRequestPermission()
+                if (host.isIme) {
+                    contentDescription = "按住此区域说话，松手输入，上滑取消。无障碍操作可点按开始，再点按结束。"
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                    setOnTouchListener { view, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                if (!recognizing) {
+                                    view.parent.requestDisallowInterceptTouchEvent(true)
+                                    downY = event.rawY; cancelGesture = false
+                                    startRecordingOrRequestPermission()
+                                }
                             }
+                            MotionEvent.ACTION_MOVE -> if (recording) {
+                                cancelGesture = downY - event.rawY > dp(64)
+                                updateRecordingUi()
+                            }
+                            MotionEvent.ACTION_UP -> {
+                                view.parent.requestDisallowInterceptTouchEvent(false)
+                                if (recording) stopRecording(!cancelGesture)
+                            }
+                            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> stopRecording(false)
                         }
-                        MotionEvent.ACTION_MOVE -> if (recording) {
-                            cancelGesture = downY - event.rawY > dp(64)
-                            updateRecordingUi()
-                        }
-                        MotionEvent.ACTION_UP -> {
-                            view.parent.requestDisallowInterceptTouchEvent(false)
-                            if (recording) stopRecording(!cancelGesture)
-                        }
-                        MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> stopRecording(false)
+                        true
                     }
-                    true
+                    setOnClickListener { if (recording) stopRecording(true) else startRecordingOrRequestPermission() }
                 }
-                setOnClickListener { if (recording) stopRecording(true) else startRecordingOrRequestPermission() }
             }
             speechArea.addView(status)
             speechArea.addView(hint)
+            if (!host.isIme) {
+                val closePreview = Button(context).apply {
+                    text = "关闭预览"; textSize = 13f; isAllCaps = false
+                    setTextColor(VoiceStyle.muted)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    visibility = View.GONE
+                    setOnClickListener {
+                        visibility = View.GONE
+                        preview.text = ""; previewBox.visibility = View.GONE
+                        status.text = "按住，说出你想写的"
+                        hint.text = "滑动中间区域移动 Mac 指针"
+                    }
+                }
+                dismissPreview = closePreview
+                speechArea.addView(closePreview, LinearLayout.LayoutParams(-2, dp(44)).apply { gravity = Gravity.END })
+            }
             preview = TextView(context).apply {
                 textSize = 20f; setTextColor(VoiceStyle.text); gravity = Gravity.TOP or Gravity.START
                 setPadding(0, dp(4), 0, dp(10))
@@ -214,6 +234,13 @@ internal class VoiceInputPanel(private val host: Host) {
             speechArea.addView(bars, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(12) })
             addView(speechArea, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(createCorrectionPanel(), LinearLayout.LayoutParams(-1, 0, 1f))
+            host.pointerControls?.let { pointer ->
+                pointer.bindPad(speechArea) {
+                    active && !recording && !recognizing && !submitting &&
+                        draftTarget == null && previewBox.visibility != View.VISIBLE
+                }
+                addView(pointer, LinearLayout.LayoutParams(-1, dp(56)))
+            }
             // A single footer owns the same recording control in every state.
             addView(LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -252,14 +279,6 @@ internal class VoiceInputPanel(private val host: Host) {
                     visibility = View.GONE
                     setOnClickListener { confirmCorrection() }
                 }
-                if (!host.isIme) addView(ImageButton(context).apply {
-                    setImageResource(R.drawable.ic_hid_mouse)
-                    imageTintList = android.content.res.ColorStateList.valueOf(VoiceStyle.muted)
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    setPadding(dp(12), dp(12), dp(12), dp(12))
-                    contentDescription = "切换到鼠标"
-                    setOnClickListener { if (!submitting) host.switchToMouse() }
-                }, LinearLayout.LayoutParams(dp(48), dp(48)))
                 addView(hold, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
                 addView(sendButton, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(6); rightMargin = dp(6) })
                 fun editButton(icon: Int, description: String, newline: Boolean) = ImageButton(context).apply {
@@ -306,7 +325,7 @@ internal class VoiceInputPanel(private val host: Host) {
             return
         }
         status.text = "按住，说出你想写的"
-        hint.text = ""
+        hint.text = if (host.isIme) "" else "滑动中间区域移动 Mac 指针"
         hold.isEnabled = true
         SpeechEngine.prepare(context, settings.asrModel) { result ->
             if (!destroyed && active && request == generation) {
@@ -314,7 +333,7 @@ internal class VoiceInputPanel(private val host: Host) {
                 // Preparation must never interrupt the hold gesture or overwrite its feedback.
                 if (!recording && !recognizing) {
                     status.text = if (ready) "按住，说出你想写的" else "暂时无法使用"
-                    hint.text = if (ready) "" else "请到设置中检查语音包"
+                    hint.text = if (!ready) "请到设置中检查语音包" else if (host.isIme) "" else "滑动中间区域移动 Mac 指针"
                 } else if (recognizing && ready) {
                     status.text = "正在识别…"
                     hint.text = "稍等片刻"
@@ -361,6 +380,8 @@ internal class VoiceInputPanel(private val host: Host) {
             audio.release(); status.text = "无法录音，请检查麦克风权限"; return
         }
         recorder = audio; pcm.clear(); recording = true
+        dismissPreview?.visibility = View.GONE
+        host.pointerControls?.discardPointerMotion()
         cancelGesture = false
         status.visibility = View.GONE
         previewBox.visibility = View.VISIBLE
@@ -469,6 +490,9 @@ internal class VoiceInputPanel(private val host: Host) {
         recognizing = false
         hold.isEnabled = true
         val text = result.getOrNull().orEmpty().trim()
+        if (!host.isIme && (result.isFailure || text.isBlank() || target == null || destination !== target)) {
+            preview.text = ""; previewBox.visibility = View.GONE
+        }
         if (previewBox.visibility == View.VISIBLE) preview.text = text
         if (result.isSuccess && text.isNotBlank() && target != null && destination === target && settings.correctionEnabled) {
             showCorrection(text, destination, request)
@@ -520,6 +544,7 @@ internal class VoiceInputPanel(private val host: Host) {
                 if (!host.isIme) {
                     preview.text = text
                     previewBox.visibility = View.VISIBLE
+                    dismissPreview?.visibility = View.VISIBLE
                     bars.visibility = View.GONE
                     previewScroll?.scrollTo(0, 0)
                 }
@@ -633,6 +658,7 @@ internal class VoiceInputPanel(private val host: Host) {
             if (restorePanel) {
                 correctionPanel.visibility = View.GONE; speechArea.visibility = View.VISIBLE
                 preview.text = ""; previewBox.visibility = View.GONE
+                dismissPreview?.visibility = View.GONE
                 bars.visibility = if (host.isIme && settings.keyboardHeightDp < 280) View.GONE else View.VISIBLE
                 status.visibility = View.VISIBLE; hint.visibility = View.VISIBLE
                 hint.text = ""

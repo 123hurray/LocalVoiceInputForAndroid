@@ -25,8 +25,8 @@ android {
         applicationId = "com.example.localvoiceime"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "1.4.16"
+        versionCode = 33
+        versionName = "1.4.17"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
