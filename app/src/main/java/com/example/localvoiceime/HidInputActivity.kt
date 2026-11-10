@@ -3,7 +3,6 @@ package com.example.localvoiceime
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Intent
@@ -27,7 +26,7 @@ class HidInputActivity : Activity() {
     private var sending = false
     private lateinit var status: TextView
     private lateinit var draft: EditText
-    private lateinit var connect: Button
+    private lateinit var discover: Button
     private lateinit var send: Button
     private lateinit var retry: Button
     private var adapter: BluetoothAdapter? = null
@@ -56,9 +55,8 @@ class HidInputActivity : Activity() {
         add(status)
         retry = VoiceStyle.button(this, "重新开启").apply { setOnClickListener { enableMode(true) } }
         add(retry)
-        connect = VoiceStyle.button(this, "选择接收设备").apply { setOnClickListener { selectHost() } }
-        add(connect)
-        add(VoiceStyle.button(this, "让接收设备发现此手机").apply { setOnClickListener { discoverable() } })
+        discover = VoiceStyle.button(this, "让 Mac 发现此手机").apply { setOnClickListener { discoverable() } }
+        add(discover)
         draft = EditText(this).apply {
             hint = "在此输入文字，或用本地语音键盘口述"
             setTextColor(VoiceStyle.text); setHintTextColor(VoiceStyle.muted)
@@ -76,7 +74,7 @@ class HidInputActivity : Activity() {
         })
         send = VoiceStyle.button(this, "发送文字", primary = true).apply { setOnClickListener { sendDraft() } }
         add(send)
-        add(label("接收端需支持本应用的文本协议。离开此页面会断开连接。", 13f, VoiceStyle.muted))
+        add(label("在 Mac 的系统设置中配对并连接此手机。接收端需支持文本协议，离开此页会断开。", 13f, VoiceStyle.muted))
         add(VoiceStyle.button(this, "语音与模型设置").apply {
             setOnClickListener { startActivity(Intent(this@HidInputActivity, SettingsActivity::class.java)) }
         })
@@ -131,19 +129,6 @@ class HidInputActivity : Activity() {
         keyboard = session
         update("正在开启蓝牙键盘…")
         session.start()
-    }
-
-    private fun selectHost() {
-        val session = keyboard ?: return
-        val hosts = session.devices()
-        if (hosts.isEmpty()) {
-            update("没有已配对的设备，请先在接收设备上配对")
-            return
-        }
-        AlertDialog.Builder(this).setTitle("选择已配对的设备")
-            .setItems(hosts.map(session::deviceName).toTypedArray()) { _, index ->
-                if (keyboard === session && visible) session.connect(hosts[index])
-            }.setNegativeButton("取消", null).show()
     }
 
     private fun discoverable() {
@@ -215,7 +200,7 @@ class HidInputActivity : Activity() {
     }
 
     private fun render() {
-        connect.isEnabled = !sending && keyboard?.registered == true
+        discover.isEnabled = !sending && keyboard?.registered == true
         send.isEnabled = !sending && keyboard?.ready == true
         retry.isEnabled = !sending
     }
