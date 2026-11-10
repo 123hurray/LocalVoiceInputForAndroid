@@ -29,6 +29,7 @@ class HidInputActivity : Activity() {
     private lateinit var discover: Button
     private lateinit var send: Button
     private lateinit var retry: Button
+    private lateinit var setupButtons: List<Button>
     private var adapter: BluetoothAdapter? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,6 +58,19 @@ class HidInputActivity : Activity() {
         add(retry)
         discover = VoiceStyle.button(this, "让 Mac 发现此手机").apply { setOnClickListener { discoverable() } }
         add(discover)
+        add(label("Mac 键盘识别", 16f, VoiceStyle.text))
+        add(label("Mac 弹出「键盘设置助理」时，按提示逐个点下方按键。完成时选择 ANSI（美国）。",
+            13f, VoiceStyle.muted))
+        setupButtons = HidKeyboard.MacSetupKey.entries.map { key ->
+            val position = when (key) {
+                HidKeyboard.MacSetupKey.LEFT_SHIFT_NEIGHBOR -> "左 Shift 右侧"
+                HidKeyboard.MacSetupKey.RIGHT_SHIFT_NEIGHBOR -> "右 Shift 左侧"
+            }
+            VoiceStyle.button(this, "${key.label} · $position").apply {
+                setOnClickListener { sendSetupKey(key) }
+                add(this)
+            }
+        }
         draft = EditText(this).apply {
             hint = "在此输入文字，或用本地语音键盘口述"
             setTextColor(VoiceStyle.text); setHintTextColor(VoiceStyle.muted)
@@ -167,6 +181,18 @@ class HidInputActivity : Activity() {
         if (requestCode == ENABLE_RADIO && visible && resultCode == RESULT_OK) enableMode(false)
     }
 
+    private fun sendSetupKey(key: HidKeyboard.MacSetupKey) {
+        val session = keyboard ?: return
+        if (!session.ready) return
+        sending = session.sendSetupKey(key) { ok ->
+            if (visible && keyboard === session) {
+                sending = false
+                update(if (ok) "已发送 ${key.label}，请查看 Mac 上的提示" else "按键发送失败，请检查连接")
+            }
+        }
+        update(if (sending) "正在发送 ${key.label}…" else "按键未发送，请检查连接")
+    }
+
     private fun sendDraft() {
         val session = keyboard ?: return
         val source = draft.text.toString()
@@ -201,7 +227,9 @@ class HidInputActivity : Activity() {
 
     private fun render() {
         discover.isEnabled = !sending && keyboard?.registered == true
-        send.isEnabled = !sending && keyboard?.ready == true
+        val readyToSend = !sending && keyboard?.ready == true
+        send.isEnabled = readyToSend
+        setupButtons.forEach { it.isEnabled = readyToSend }
         retry.isEnabled = !sending
     }
 

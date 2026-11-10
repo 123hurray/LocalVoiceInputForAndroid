@@ -114,11 +114,21 @@ internal class HidKeyboard(
         changed("已连接：$name")
     }
 
-    fun send(text: String, done: (Boolean) -> Unit): Boolean {
+    enum class MacSetupKey(val label: String, val usage: Int) {
+        LEFT_SHIFT_NEIGHBOR("Z", 0x1d),
+        RIGHT_SHIFT_NEIGHBOR("/", 0x38),
+    }
+
+    fun sendSetupKey(key: MacSetupKey, done: (Boolean) -> Unit): Boolean =
+        sendKeys(intArrayOf(key.usage), done)
+
+    fun send(text: String, done: (Boolean) -> Unit): Boolean =
+        sendKeys(HidTextFrame.encode(text), done)
+
+    private fun sendKeys(keys: IntArray, done: (Boolean) -> Unit): Boolean {
         val hid = profile ?: return false
         val device = host ?: return false
         if (!ready) return false
-        val keys = HidTextFrame.encode(text)
         val epoch = ++sendEpoch
         sending = worker.submit {
             val release = ByteArray(8)
