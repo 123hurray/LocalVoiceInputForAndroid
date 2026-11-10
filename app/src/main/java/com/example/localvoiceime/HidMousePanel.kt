@@ -58,7 +58,7 @@ internal class HidMousePanel(
             isMotionEventSplittingEnabled = true
             setPadding(dp(8), 0, dp(8), 0)
             addView(icon(R.drawable.ic_hid_voice, "切换到语音输入", openVoice), LayoutParams(dp(48), dp(48)))
-            for (button in listOf(left, wheel, right)) {
+            for (button in listOf(this@HidMousePanel.left, wheel, this@HidMousePanel.right)) {
                 button.textSize = 14f
                 button.minWidth = 0
                 button.setPadding(dp(4), 0, dp(4), 0)
