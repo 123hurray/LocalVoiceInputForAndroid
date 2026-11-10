@@ -32,9 +32,9 @@ def main():
         for event in device.read_loop():
             if event.type != ecodes.EV_KEY or event.value != 1:
                 continue
-            if event.code == ecodes.KEY_F13:
+            if event.code == ecodes.KEY_F18:
                 body = []
-            elif event.code == ecodes.KEY_F14:
+            elif event.code == ecodes.KEY_F19:
                 if body is not None:
                     try:
                         text = decode_frame("".join(body))

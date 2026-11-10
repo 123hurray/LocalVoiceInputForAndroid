@@ -2,10 +2,10 @@ package com.example.localvoiceime
 
 import java.util.zip.CRC32
 
-/** US keyboard usages. Wire format: F13, lowercase UTF-8 hex, CRC32 hex, F14. */
+/** US keyboard usages. Wire format: F18, lowercase UTF-8 hex, CRC32 hex, F19. */
 internal object HidTextFrame {
-    const val START = 0x68
-    const val END = 0x69
+    const val START = 0x6c
+    const val END = 0x6d
     const val MAX_BYTES = 1024
     private const val HEX = "0123456789abcdef"
 

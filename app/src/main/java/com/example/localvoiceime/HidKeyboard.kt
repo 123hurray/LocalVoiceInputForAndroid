@@ -29,7 +29,8 @@ internal class HidKeyboard(
     private var host: BluetoothDevice? = null
     private var sending: Future<*>? = null
     private var sendEpoch = 0
-    val ready get() = registered && host != null && sending == null
+    val connected get() = registered && host != null
+    val ready get() = connected && sending == null
 
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
@@ -56,7 +57,7 @@ internal class HidKeyboard(
                     val interrupted = sending != null
                     stopSend()
                     host = null
-                    changed(if (interrupted) "发送中断，草稿已保留；请从 Mac 重新连接" else WAITING_FOR_HOST)
+                    changed(if (interrupted) "发送中断；请从 Mac 重新连接" else WAITING_FOR_HOST)
                 }
             }
         }
