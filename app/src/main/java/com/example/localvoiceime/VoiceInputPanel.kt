@@ -208,7 +208,7 @@ internal class VoiceInputPanel(private val host: Host) {
                         visibility = View.GONE
                         preview.text = ""; previewBox.visibility = View.GONE
                         status.text = "按住，说出你想写的"
-                        this@VoiceInputPanel.hint.text = "滑动中间区域移动 Mac 指针"
+                        this@VoiceInputPanel.hint.text = "单指移动指针 · 双指滑动滚动"
                     }
                 }
                 dismissPreview = closePreview
@@ -239,7 +239,6 @@ internal class VoiceInputPanel(private val host: Host) {
                     active && !recording && !recognizing && !submitting &&
                         draftTarget == null && previewBox.visibility != View.VISIBLE
                 }
-                addView(pointer, LinearLayout.LayoutParams(-1, dp(56)))
             }
             // A single footer owns the same recording control in every state.
             addView(LinearLayout(context).apply {
@@ -325,7 +324,7 @@ internal class VoiceInputPanel(private val host: Host) {
             return
         }
         status.text = "按住，说出你想写的"
-        hint.text = if (host.isIme) "" else "滑动中间区域移动 Mac 指针"
+        hint.text = if (host.isIme) "" else "单指移动指针 · 双指滑动滚动"
         hold.isEnabled = true
         SpeechEngine.prepare(context, settings.asrModel) { result ->
             if (!destroyed && active && request == generation) {
@@ -333,7 +332,7 @@ internal class VoiceInputPanel(private val host: Host) {
                 // Preparation must never interrupt the hold gesture or overwrite its feedback.
                 if (!recording && !recognizing) {
                     status.text = if (ready) "按住，说出你想写的" else "暂时无法使用"
-                    hint.text = if (!ready) "请到设置中检查语音包" else if (host.isIme) "" else "滑动中间区域移动 Mac 指针"
+                    hint.text = if (!ready) "请到设置中检查语音包" else if (host.isIme) "" else "单指移动指针 · 双指滑动滚动"
                 } else if (recognizing && ready) {
                     status.text = "正在识别…"
                     hint.text = "稍等片刻"
