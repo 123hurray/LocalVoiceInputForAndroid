@@ -28,6 +28,7 @@ internal class HidKeyboard(
     private var profile: BluetoothHidDevice? = null
     private var closed = false
     private var visible = false
+    private var interactive = false
     private var profileRequested = false
     private var registrationRequestedAt: Long? = null
     private var registrationAttempts = 0
@@ -48,7 +49,7 @@ internal class HidKeyboard(
         override fun run() {
             if (!visible || closed) return
             refresh()
-            main.postDelayed(this, 700)
+            main.postDelayed(this, if (interactive) 700 else 5000)
         }
     }
     var registered = false
@@ -58,6 +59,9 @@ internal class HidKeyboard(
     private var sendEpoch = 0
     @Volatile private var mouseEpoch = 0
     private var mouseMayBePressed = false
+    private val mouseMotion = MouseMotionBuffer()
+    private val mouseQueueLock = Any()
+    private var mousePumpQueued = false
     private class AwaitingAck(val device: BluetoothDevice) {
         val reply = ArrayBlockingQueue<HidReportProtocol.Attempt>(1)
     }
@@ -193,6 +197,15 @@ internal class HidKeyboard(
         }, 5000)
     }
 
+    fun setInteractive(active: Boolean) {
+        if (interactive == active) return
+        interactive = active
+        if (visible && !closed) {
+            main.removeCallbacks(refreshTask)
+            main.post(refreshTask)
+        }
+    }
+
     fun resume() {
         if (closed) return
         visible = true
@@ -202,6 +215,11 @@ internal class HidKeyboard(
         requestProfile()
         refresh()
         main.postDelayed(refreshTask, 700)
+    }
+
+    fun cancelInput() {
+        resetMouse()
+        stopSend()
     }
 
     fun pause() {
@@ -313,7 +331,7 @@ internal class HidKeyboard(
 
     private fun clearHost() {
         missingSince = 0
-        mouseEpoch++
+        synchronized(mouseQueueLock) { mouseEpoch++; mouseMotion.clear(); mousePumpQueued = false }
         mouseMayBePressed = false
         stopSend()
         host = null
@@ -356,7 +374,14 @@ internal class HidKeyboard(
         if (!visible || !ready) return
         mouseMayBePressed = mouseMayBePressed || buttons != 0 || click != 0
         val epoch = mouseEpoch
-        worker.execute {
+        if (click == 0 && buttons == 0) {
+            synchronized(mouseQueueLock) {
+                mouseMotion.add(buttons, dx, dy, wheel)
+                if (mousePumpQueued) return
+                mousePumpQueued = true
+                worker.execute { pumpMouse(hid, device, epoch) }
+            }
+        } else worker.execute {
             if (epoch != mouseEpoch) return@execute
             runCatching {
                 if (click != 0) {
@@ -370,8 +395,36 @@ internal class HidKeyboard(
         }
     }
 
+    private fun pumpMouse(hid: BluetoothHidDevice, device: BluetoothDevice, epoch: Int) {
+        try {
+            while (epoch == mouseEpoch && !Thread.currentThread().isInterrupted) {
+                val delta = synchronized(mouseQueueLock) {
+                    if (epoch == mouseEpoch) mouseMotion.take() else null
+                } ?: break
+                if (epoch != mouseEpoch) break
+                if (!hid.sendReport(device, HidReportProtocol.MOUSE_ID,
+                        HidReportProtocol.mouseReport(delta.buttons, delta.x, delta.y, delta.wheel))) break
+                if (delta.wheel != 0) Thread.sleep(8)
+            }
+        } catch (_: Exception) {
+            synchronized(mouseQueueLock) { if (epoch == mouseEpoch) mouseMotion.clear() }
+        } finally {
+            synchronized(mouseQueueLock) {
+                if (epoch != mouseEpoch) return@synchronized
+                mousePumpQueued = false
+                // An event may arrive between take() returning null and acquiring this lock.
+                val remaining = if (epoch == mouseEpoch) mouseMotion.take() else null
+                if (remaining != null) {
+                    mouseMotion.add(remaining.buttons, remaining.x, remaining.y, remaining.wheel)
+                    mousePumpQueued = true
+                    worker.execute { pumpMouse(hid, device, epoch) }
+                }
+            }
+        }
+    }
+
     fun resetMouse() {
-        val epoch = ++mouseEpoch
+        val epoch = synchronized(mouseQueueLock) { mouseEpoch++; mouseMotion.clear(); mousePumpQueued = false; mouseEpoch }
         val release = mouseMayBePressed
         mouseMayBePressed = false
         if (!release) return

@@ -42,7 +42,7 @@ internal class TrackpadGesture(private val slop: Float, private val density: Flo
         val dy = fingers.sumOf { (it.y - old.getValue(it.id).y).toDouble() }.toFloat() / fingers.size
         previous = fingers
         if (!moved) return Effect()
-        return if (peakCount == 2) Effect(wheel = -dy / (12f * density))
+        return if (peakCount == 2) Effect(wheel = -dy / (6f * density))
         else Effect(dx = dx * POINTER_GAIN / density, dy = dy * POINTER_GAIN / density)
     }
 

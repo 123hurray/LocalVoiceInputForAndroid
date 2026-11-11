@@ -34,6 +34,7 @@ internal class VoiceInputPanel(private val host: Host) {
         fun submit(target: Any, text: String, done: (InputDelivery) -> Unit)
         fun editKey(newline: Boolean)
         val pointerControls: HidPointerControls? get() = null
+        fun editWithKeyboard(text: String, done: (String?) -> Unit) {}
         fun openSettings()
         fun openModelSettings()
         fun returnToKeyboard(showPicker: Boolean) {}
@@ -76,7 +77,6 @@ internal class VoiceInputPanel(private val host: Host) {
     private lateinit var preview: TextView
     private lateinit var previewBox: View
     private var previewScroll: ScrollView? = null
-    private var dismissPreview: Button? = null
     private var streamingSpeech: SpeechEngine.StreamingSpeech? = null
     private lateinit var inputPanel: LinearLayout
     private val main = Handler(Looper.getMainLooper())
@@ -198,22 +198,6 @@ internal class VoiceInputPanel(private val host: Host) {
             }
             speechArea.addView(status)
             speechArea.addView(hint)
-            if (!host.isIme) {
-                val closePreview = Button(context).apply {
-                    text = "关闭预览"; textSize = 13f; isAllCaps = false
-                    setTextColor(VoiceStyle.muted)
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    visibility = View.GONE
-                    setOnClickListener {
-                        visibility = View.GONE
-                        preview.text = ""; previewBox.visibility = View.GONE
-                        status.text = "按住，说出你想写的"
-                        this@VoiceInputPanel.hint.text = "单指移动指针 · 双指滑动滚动"
-                    }
-                }
-                dismissPreview = closePreview
-                speechArea.addView(closePreview, LinearLayout.LayoutParams(-2, dp(44)).apply { gravity = Gravity.END })
-            }
             preview = TextView(context).apply {
                 textSize = 20f; setTextColor(VoiceStyle.text); gravity = Gravity.TOP or Gravity.START
                 setPadding(0, dp(4), 0, dp(10))
@@ -379,7 +363,6 @@ internal class VoiceInputPanel(private val host: Host) {
             audio.release(); status.text = "无法录音，请检查麦克风权限"; return
         }
         recorder = audio; pcm.clear(); recording = true
-        dismissPreview?.visibility = View.GONE
         host.pointerControls?.discardPointerMotion()
         cancelGesture = false
         status.visibility = View.GONE
@@ -534,19 +517,12 @@ internal class VoiceInputPanel(private val host: Host) {
             submitting = false
             hold.isEnabled = true; sendButton.isEnabled = true; correctionWords.isEnabled = true
             if (result == InputDelivery.CONFIRMED) {
-                if (review) clearCorrection()
+                clearCorrection()
                 status.text = when {
                     host.isIme -> "已输入"
                     else -> "Mac 已确认接收"
                 }
                 hint.text = "还可以继续说"
-                if (!host.isIme) {
-                    preview.text = text
-                    previewBox.visibility = View.VISIBLE
-                    dismissPreview?.visibility = View.VISIBLE
-                    bars.visibility = View.GONE
-                    previewScroll?.scrollTo(0, 0)
-                }
                 if (host.isIme && settings.autoReturnToPreviousIme) main.postDelayed({
                     if (!destroyed && active && request == generation && host.destination === target) host.returnToKeyboard(false)
                 }, 150)
@@ -657,7 +633,6 @@ internal class VoiceInputPanel(private val host: Host) {
             if (restorePanel) {
                 correctionPanel.visibility = View.GONE; speechArea.visibility = View.VISIBLE
                 preview.text = ""; previewBox.visibility = View.GONE
-                dismissPreview?.visibility = View.GONE
                 bars.visibility = if (host.isIme && settings.keyboardHeightDp < 280) View.GONE else View.VISIBLE
                 status.visibility = View.VISIBLE; hint.visibility = View.VISIBLE
                 hint.text = ""
@@ -713,6 +688,11 @@ internal class VoiceInputPanel(private val host: Host) {
             }
         }, LinearLayout.LayoutParams(-2, dp(40)))
         if (range == null) { candidateStatus.text = ""; candidateStatus.visibility = View.GONE; return }
+        if (!host.isIme) candidateStrip.addView(Button(context).apply {
+            text = "键盘修改"; textSize = 13f; minWidth = 0
+            setTextColor(VoiceStyle.text); setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setOnClickListener { editSelectedWithKeyboard() }
+        }, LinearLayout.LayoutParams(-2, dp(40)))
         candidateStatus.visibility = View.VISIBLE
         val selected = correctionWords.selectedText()
         val options = linkedSetOf<String>()
@@ -737,6 +717,26 @@ internal class VoiceInputPanel(private val host: Host) {
             setOnClickListener { replaceSelected("") }
         }, LinearLayout.LayoutParams(-2, dp(40)))
 
+    }
+
+    private fun editSelectedWithKeyboard() {
+        val range = correctionWords.selection ?: return
+        if (!active || recording || recognizing || submitting || draftTarget == null) return
+        val source = draftText
+        val request = generation
+        val destination = host.destination
+        pendingSpeech?.cancel(); pendingSpeech = null
+        candidateEpoch++; candidateRunning = false; macEpoch++; macChecking = false
+        host.editWithKeyboard(source.substring(range)) { replacement ->
+            if (replacement == null || !active || destroyed || generation != request ||
+                host.destination !== destination || draftText != source || submitting) return@editWithKeyboard
+            draftUndo.addLast(draftText)
+            draftText = source.replaceRange(range, replacement)
+            draftAudio = null; otherResults.clear(); candidatesLoaded = false
+            macFeedback = ""
+            correctionWords.show(draftText)
+            renderCandidates()
+        }
     }
 
     private fun checkDraftWords() {

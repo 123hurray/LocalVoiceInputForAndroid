@@ -7,7 +7,7 @@ class TrackpadGestureTest {
     private fun finger(id: Int, x: Float = 0f, y: Float = 0f) = TrackpadGesture.Finger(id, x, y)
     private fun gesture() = TrackpadGesture(4f, 1f)
 
-    @Test fun pointerGainIsThirtyPercentFasterWithoutChangingTheWheel() {
+    @Test fun pointerGainIsThirtyPercentFaster() {
         val g = gesture()
         g.start(listOf(finger(5)), 0)
         val moved = g.move(listOf(finger(5, 20f, 10f)))
@@ -32,7 +32,7 @@ class TrackpadGestureTest {
         g.start(listOf(finger(5)), 0)
         g.add(listOf(finger(5), finger(9, 50f)))
         val scroll = g.move(listOf(finger(5, y = -24f), finger(9, 50f, -24f)))
-        assertEquals(2f, scroll.wheel, 0f)
+        assertEquals(4f, scroll.wheel, 0f)
         assertEquals(0f, scroll.dx, 0f)
         assertEquals(0f, scroll.dy, 0f)
         g.lift(listOf(finger(9, 50f, -24f)), 100)

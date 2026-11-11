@@ -7,11 +7,18 @@ import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Intent
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
+import android.text.InputType
+import android.view.inputmethod.InputMethodManager
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -20,6 +27,24 @@ import android.widget.TextView
 @SuppressLint("MissingPermission")
 class HidInputActivity : Activity() {
     private var keyboard: HidKeyboard? = null
+    private var linkService: HidLinkService? = null
+    private var bound = false
+    private val linkChanged: (String) -> Unit = { message ->
+        keyboard = linkService?.keyboard
+        if (visible) updateConnection(message)
+    }
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            linkService = (binder as HidLinkService.LocalBinder).service
+            linkService?.keyboard?.setInteractive(true)
+            linkService?.listen(linkChanged)
+        }
+        override fun onServiceDisconnected(name: ComponentName) {
+            linkService?.removeListener(linkChanged)
+            linkService = null; keyboard = null
+            if (visible) updateConnection("蓝牙连接服务已停止，请在设置中重新开启")
+        }
+    }
     private var adapter: BluetoothAdapter? = null
     private var visible = false
     private var permissionRequested = false
@@ -57,6 +82,33 @@ class HidInputActivity : Activity() {
         }
 
         override val pointerControls get() = pointer
+        override fun editWithKeyboard(text: String, done: (String?) -> Unit) {
+            if (!visible || settingsOpen || sending) { done(null); return }
+            val input = EditText(context).apply {
+                setText(text)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                setSelection(length())
+                minLines = 2; maxLines = 6
+                isSaveEnabled = false
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            var result: String? = null
+            val dialog = AlertDialog.Builder(context).setTitle("修改选中文字").setView(input)
+                .setPositiveButton("替换") { _, _ -> result = input.text.toString() }
+                .setNegativeButton("取消", null)
+                .setNeutralButton("切换键盘", null)
+                .create()
+            dialog.setOnDismissListener { done(result) }
+            dialog.setOnShowListener {
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                    getSystemService(InputMethodManager::class.java).showInputMethodPicker()
+                }
+                input.requestFocus()
+                dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                input.post { getSystemService(InputMethodManager::class.java).showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) }
+            }
+            dialog.show()
+        }
         override fun openSettings() { showSettings(true) }
         override fun openModelSettings() {
             startActivity(Intent(context, SettingsActivity::class.java))
@@ -125,14 +177,16 @@ class HidInputActivity : Activity() {
         panel.deactivate()
         displayedConnection = null
         pointer.setAvailable(false)
-        keyboard?.pause()
+        keyboard?.cancelInput()
+        keyboard?.setInteractive(false)
+        linkService?.removeListener(linkChanged)
+        if (bound) { unbindService(serviceConnection); bound = false }
+        linkService = null; keyboard = null
         sending = false
         super.onStop()
     }
 
     override fun onDestroy() {
-        keyboard?.close()
-        keyboard = null
         panel.destroy()
         super.onDestroy()
     }
@@ -194,18 +248,16 @@ class HidInputActivity : Activity() {
             if (interactive) requestBluetooth(BluetoothAdapter.ACTION_REQUEST_ENABLE, ENABLE_RADIO)
             return
         }
-        val current = keyboard
-        if (current != null) {
-            current.resume()
-            updateConnection(current.status)
-            return
-        }
-        val session = HidKeyboard(this, radio) { message ->
-            if (visible) updateConnection(message)
-        }
-        keyboard = session
-        updateConnection(session.status)
-        session.resume()
+        val intent = Intent(this, HidLinkService::class.java)
+        runCatching {
+            startForegroundService(intent)
+            if (!bound) bound = bindService(intent, serviceConnection, BIND_AUTO_CREATE)
+            else {
+                keyboard = linkService?.keyboard
+                keyboard?.resume()
+                updateConnection(keyboard?.status ?: "正在开启蓝牙连接…")
+            }
+        }.onFailure { updateConnection("蓝牙连接服务无法启动，请重试") }
     }
 
     private fun discoverable() {
