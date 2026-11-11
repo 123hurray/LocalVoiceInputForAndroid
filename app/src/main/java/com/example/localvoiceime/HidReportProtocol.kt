@@ -35,6 +35,9 @@ internal object HidReportProtocol {
         return items.map(Int::toByte).toByteArray()
     }
 
+    fun appSwitchHold(previous: Boolean): ByteArray =
+        ByteArray(8).apply { this[0] = (if (previous) 0x0a else 0x08).toByte() }
+
     fun appSwitchReport(previous: Boolean): ByteArray =
         ByteArray(8).apply { this[0] = (if (previous) 0x0a else 0x08).toByte(); this[2] = 0x2b }
 

@@ -42,6 +42,8 @@ class HidReportProtocolTest {
     @Test fun appSwitchKeysUseCommandAndTabWithoutControl() {
         assertArrayEquals(byteArrayOf(8, 0, 0x2b, 0, 0, 0, 0, 0), HidReportProtocol.appSwitchReport(false))
         assertArrayEquals(byteArrayOf(10, 0, 0x2b, 0, 0, 0, 0, 0), HidReportProtocol.appSwitchReport(true))
+        assertArrayEquals(byteArrayOf(8, 0, 0, 0, 0, 0, 0, 0), HidReportProtocol.appSwitchHold(false))
+        assertArrayEquals(byteArrayOf(10, 0, 0, 0, 0, 0, 0, 0), HidReportProtocol.appSwitchHold(true))
     }
 
     @Test fun mouseReportsUseIndependentIdAndSignedRelativeAxes() {

@@ -57,6 +57,8 @@ internal class HidKeyboard(
     private var host: BluetoothDevice? = null
     private var sending: Future<*>? = null
     private var sendEpoch = 0
+    private var appSwitchActive = false
+    @Volatile private var appSwitchEpoch = 0
     @Volatile private var mouseEpoch = 0
     private var mouseMayBePressed = false
     private val mouseMotion = MouseMotionBuffer()
@@ -67,7 +69,7 @@ internal class HidKeyboard(
     }
     @Volatile private var awaitingAck: AwaitingAck? = null
     val connected get() = registered && host != null
-    val ready get() = connected && sending == null
+    val ready get() = connected && sending == null && !appSwitchActive
 
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
@@ -443,20 +445,41 @@ internal class HidKeyboard(
         RIGHT_SHIFT_NEIGHBOR("/", 0x38),
     }
 
-    fun switchApplication(previous: Boolean, done: (Boolean) -> Unit): Boolean =
-        enqueue({ hid, device, _ ->
-            val press = HidReportProtocol.appSwitchReport(previous)
-            var pressed = false
-            var released = false
-            try {
-                pressed = hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, press)
-                if (pressed) Thread.sleep(24)
-            } finally {
-                // Always release Command and Shift, including cancellation or a failed send.
-                released = hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8))
+    fun stepApplication(previous: Boolean): Boolean {
+        val hid = profile ?: return false
+        val device = host ?: return false
+        if (!visible || !connected || sending != null || closed) return false
+        if (!appSwitchActive) { appSwitchActive = true; appSwitchEpoch++ }
+        val epoch = appSwitchEpoch
+        worker.execute {
+            if (epoch != appSwitchEpoch) return@execute
+            val modifiers = HidReportProtocol.appSwitchHold(previous)
+            val ok = runCatching {
+                if (!hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, modifiers)) return@runCatching false
+                Thread.sleep(8)
+                if (epoch != appSwitchEpoch) return@runCatching false
+                if (!hid.sendReport(device, HidReportProtocol.KEYBOARD_ID,
+                        HidReportProtocol.appSwitchReport(previous))) return@runCatching false
+                Thread.sleep(16)
+                // Release Tab only. Command (and Shift for reverse) stays down until finger-up.
+                hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, modifiers)
+            }.getOrDefault(false)
+            if (!ok) {
+                runCatching { hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8)) }
+                main.post { if (epoch == appSwitchEpoch) endApplicationSwitch() }
             }
-            if (pressed && released) InputDelivery.CONFIRMED else InputDelivery.FAILED
-        }, { done(it == InputDelivery.CONFIRMED) })
+        }
+        return true
+    }
+
+    fun endApplicationSwitch() {
+        if (!appSwitchActive) return
+        appSwitchActive = false
+        appSwitchEpoch++
+        val hid = profile ?: return
+        val device = host ?: return
+        worker.execute { runCatching { hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8)) } }
+    }
 
     fun sendSetupKey(key: MacSetupKey, done: (Boolean) -> Unit): Boolean = sendKey(key.usage, done)
 
@@ -532,6 +555,7 @@ internal class HidKeyboard(
     }
 
     private fun stopSend() {
+        endApplicationSwitch()
         sendEpoch++
         awaitingAck = null
         sending?.cancel(true)

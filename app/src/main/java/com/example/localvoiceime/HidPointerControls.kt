@@ -13,6 +13,7 @@ internal class HidPointerControls(
     private val send: (buttons: Int, dx: Int, dy: Int, wheel: Int, click: Int) -> Unit,
     private val release: () -> Unit,
     private val switchApp: (previous: Boolean) -> Unit,
+    private val endSwitch: () -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val gesture = TrackpadGesture(
@@ -41,6 +42,7 @@ internal class HidPointerControls(
         motionPending = false
         dx = 0f; dy = 0f; wheelSteps = 0f
         gesture.reset()
+        endSwitch()
         if (buttons != 0) { buttons = 0; release() }
     }
 
@@ -60,13 +62,14 @@ internal class HidPointerControls(
                 }
             }
             if (edgeCaptured) {
-                if (!available || !canMove()) edge.cancel()
+                if (!available || !canMove()) { edge.cancel(); endSwitch() }
                 when (event.actionMasked) {
-                    MotionEvent.ACTION_POINTER_DOWN -> edge.cancel()
+                    MotionEvent.ACTION_POINTER_DOWN -> { edge.cancel(); endSwitch() }
                     MotionEvent.ACTION_MOVE -> edge.move(event.x, event.y, event.pointerCount)?.let { switchApp(it) }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         edgeCaptured = false
                         edge.cancel()
+                        endSwitch()
                         view.parent.requestDisallowInterceptTouchEvent(false)
                     }
                 }

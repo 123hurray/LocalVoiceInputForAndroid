@@ -85,6 +85,7 @@ internal class VoiceInputPanel(private val host: Host) {
     private var recorder: AudioRecord? = null
     private var recordingThread: Thread? = null
     @Volatile private var recording = false
+    @Volatile private var recordingToken = 0
     @Volatile private var level = 0f
     private var recognizing = false
     private var ready = false
@@ -397,11 +398,13 @@ internal class VoiceInputPanel(private val host: Host) {
             streamingSpeech = session
         }
         val liveSession = streamingSpeech
+        val captureToken = ++recordingToken
         recordingThread = thread(name = "Voice-Record") {
             val buffer = ShortArray(512)
-            while (recording) {
+            while (recording && captureToken == recordingToken) {
                 val n = audio.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
-                if (n > 0 && recording) {
+                // A successful read still contains real audio if the user released during the read.
+                if (n > 0 && captureToken == recordingToken) {
                     val allowed = minOf(n, (limit - pcm.size()).coerceAtLeast(0))
                     pcm.append(buffer, allowed)
                     liveSession?.accept(buffer, allowed)
@@ -409,12 +412,12 @@ internal class VoiceInputPanel(private val host: Host) {
                     for (i in 0 until n) peak = max(peak, abs(buffer[i].toInt()))
                     level = (peak / 10000f).coerceIn(0.1f, 1f)
                     if (pcm.size() >= limit) {
-                        main.post { if (active && request == generation) stopRecording(!cancelGesture) }
+                        main.post { if (active && request == generation && captureToken == recordingToken) stopRecording(!cancelGesture) }
                         break
                     }
-                } else if (n < 0 && recording) {
+                } else if (n < 0 && recording && captureToken == recordingToken) {
                     main.post {
-                        if (active && request == generation) { stopRecording(false); status.text = "录音中断，请重试" }
+                        if (active && request == generation && captureToken == recordingToken) { stopRecording(false); status.text = "录音中断，请重试" }
                     }
                     break
                 }
@@ -440,7 +443,7 @@ internal class VoiceInputPanel(private val host: Host) {
             status.visibility = if (draftTarget == null) View.VISIBLE else View.GONE
             status.text = "已取消"; hint.text = "按住说话 · 松手输入"; return
         }
-        if (pcm.size() < SAMPLE_RATE / 4) {
+        if (pcm.size() < SAMPLE_RATE * 80 / 1000) {
             streamingSpeech?.cancel(); streamingSpeech = null; pcm.clear()
             preview.text = ""; previewBox.visibility = View.GONE
             status.visibility = if (draftTarget == null) View.VISIBLE else View.GONE
