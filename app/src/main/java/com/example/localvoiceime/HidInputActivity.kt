@@ -141,6 +141,11 @@ class HidInputActivity : Activity() {
         discover = action("让 Mac 发现此手机", click = ::discoverable)
         settingsBody.addRow(retry)
         settingsBody.addRow(discover)
+        settingsBody.addRow(action("断开并停止后台连接") {
+            if (!sending && linkService != null) {
+                startService(Intent(this, HidLinkService::class.java).setAction(HidLinkService.ACTION_STOP))
+            }
+        })
         settingsBody.addRow(action("连接已配对的 Mac", click = ::choosePairedMac))
         settingsBody.addRow(label("在 Mac 的「系统设置 → 蓝牙」连接此手机。", 14f, VoiceStyle.muted))
         settingsBody.addRow(label("Mac 键盘识别", 18f))

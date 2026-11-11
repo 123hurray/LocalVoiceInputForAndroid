@@ -41,7 +41,7 @@ class HidLinkService : Service() {
     override fun onBind(intent: Intent): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == STOP) {
+        if (intent?.action == ACTION_STOP) {
             keyboard?.close(); keyboard = null
             lastStatus = "蓝牙输入已停用"
             listeners.toList().forEach { it(lastStatus) }
@@ -51,7 +51,7 @@ class HidLinkService : Service() {
         }
         val open = PendingIntent.getActivity(this, 0, Intent(this, HidInputActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(this, 1, Intent(this, HidLinkService::class.java).setAction(STOP),
+        val stop = PendingIntent.getService(this, 1, Intent(this, HidLinkService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_bluetooth_link)
@@ -86,6 +86,6 @@ class HidLinkService : Service() {
     companion object {
         private const val CHANNEL = "hid_link"
         private const val ID = 31
-        private const val STOP = "com.example.localvoiceime.STOP_HID_LINK"
+        internal const val ACTION_STOP = "com.example.localvoiceime.STOP_HID_LINK"
     }
 }
