@@ -12,11 +12,15 @@ internal class HidPointerControls(
     context: Context,
     private val send: (buttons: Int, dx: Int, dy: Int, wheel: Int, click: Int) -> Unit,
     private val release: () -> Unit,
+    private val switchApp: (previous: Boolean) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val gesture = TrackpadGesture(
         ViewConfiguration.get(context).scaledTouchSlop.toFloat(), context.resources.displayMetrics.density,
+        ViewConfiguration.get(context).scaledDoubleTapSlop.toFloat(),
     )
+    private val density = context.resources.displayMetrics.density
+    private var buttons = 0
     private var available = false
     private var dx = 0f
     private var dy = 0f
@@ -37,14 +41,37 @@ internal class HidPointerControls(
         motionPending = false
         dx = 0f; dy = 0f; wheelSteps = 0f
         gesture.reset()
+        if (buttons != 0) { buttons = 0; release() }
     }
 
     fun bindPad(pad: View, canMove: () -> Boolean) {
-        pad.contentDescription = "单指滑动移动指针，单指轻点左键，双指轻点右键，双指滑动滚动"
+        pad.contentDescription = "单指移动，单指轻点左键，轻点后再次按住滑动可拖拽，双指轻点右键，双指滑动滚动，右侧上滑或下滑切换应用"
         pad.setOnClickListener {
             if (available && canMove()) send(0, 0, 0, 0, 1)
         }
+        val edge = EdgeSwitchGesture(24f * density, 40f * density)
+        var edgeCaptured = false
         pad.setOnTouchListener { view, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                edgeCaptured = available && canMove() && edge.begin(event.x, event.y, view.width.toFloat())
+                if (edgeCaptured) {
+                    discardPointerMotion()
+                    view.parent.requestDisallowInterceptTouchEvent(true)
+                }
+            }
+            if (edgeCaptured) {
+                if (!available || !canMove()) edge.cancel()
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_POINTER_DOWN -> edge.cancel()
+                    MotionEvent.ACTION_MOVE -> edge.move(event.x, event.y, event.pointerCount)?.let { switchApp(it) }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        edgeCaptured = false
+                        edge.cancel()
+                        view.parent.requestDisallowInterceptTouchEvent(false)
+                    }
+                }
+                return@setOnTouchListener true
+            }
             if (!available || !canMove()) {
                 discardPointerMotion()
                 return@setOnTouchListener false
@@ -58,7 +85,7 @@ internal class HidPointerControls(
                     view.parent.requestDisallowInterceptTouchEvent(true)
                     TrackpadGesture.Effect()
                 }
-                MotionEvent.ACTION_POINTER_DOWN -> { gesture.add(fingers()); TrackpadGesture.Effect() }
+                MotionEvent.ACTION_POINTER_DOWN -> gesture.add(fingers())
                 MotionEvent.ACTION_MOVE -> gesture.move(fingers())
                 MotionEvent.ACTION_POINTER_UP -> gesture.lift(fingers(event.actionIndex), event.eventTime)
                 MotionEvent.ACTION_UP -> {
@@ -71,6 +98,11 @@ internal class HidPointerControls(
                     TrackpadGesture.Effect()
                 }
                 else -> TrackpadGesture.Effect()
+            }
+            effect.heldButtons?.let { mask ->
+                flushMotion()
+                buttons = mask
+                send(buttons, 0, 0, 0, 0)
             }
             dx += effect.dx; dy += effect.dy; wheelSteps += effect.wheel
             if (effect.click != 0) {
@@ -96,7 +128,7 @@ internal class HidPointerControls(
         val w = wheelSteps.toInt().coerceIn(-127, 127)
         if (x == 0 && y == 0 && w == 0) return
         dx -= x; dy -= y; wheelSteps -= w
-        send(0, x, y, w, 0)
+        send(buttons, x, y, w, 0)
         if (abs(dx) >= 1f || abs(dy) >= 1f || abs(wheelSteps) >= 1f) scheduleMotion()
     }
 }

@@ -50,4 +50,27 @@ class TrackpadGestureTest {
         g.move(listOf(finger(1, -10f), finger(2, 60f)))
         assertEquals(0, g.lift(emptyList(), 170).click)
     }
+    @Test fun aTapThenImmediateSlideHoldsLeftUntilTheFingerLifts() {
+        val g = gesture()
+        g.start(listOf(finger(5)), 0)
+        assertEquals(1, g.lift(emptyList(), 50).click)
+        g.start(listOf(finger(5)), 120)
+        val drag = g.move(listOf(finger(5, 20f)))
+        assertEquals(1, drag.heldButtons)
+        assertTrue(drag.dx > 0)
+        val end = g.lift(emptyList(), 200)
+        assertEquals(0, end.heldButtons)
+        assertEquals(0, end.click)
+    }
+
+    @Test fun secondFingerDuringDragReleasesLeftWithoutAContextClick() {
+        val g = gesture()
+        g.start(listOf(finger(1)), 0)
+        g.lift(emptyList(), 50)
+        g.start(listOf(finger(1)), 100)
+        g.move(listOf(finger(1, 20f)))
+        assertEquals(0, g.add(listOf(finger(1, 20f), finger(2, 50f))).heldButtons)
+        assertEquals(0, g.lift(emptyList(), 150).click)
+    }
+
 }

@@ -35,6 +35,9 @@ internal object HidReportProtocol {
         return items.map(Int::toByte).toByteArray()
     }
 
+    fun appSwitchReport(previous: Boolean): ByteArray =
+        ByteArray(8).apply { this[0] = (if (previous) 0x0a else 0x08).toByte(); this[2] = 0x2b }
+
     fun mouseReport(buttons: Int, dx: Int, dy: Int, wheel: Int): ByteArray =
         byteArrayOf((buttons and 0x07).toByte(), dx.coerceIn(-127, 127).toByte(),
             dy.coerceIn(-127, 127).toByte(), wheel.coerceIn(-127, 127).toByte())

@@ -374,7 +374,7 @@ internal class HidKeyboard(
         if (!visible || !ready) return
         mouseMayBePressed = mouseMayBePressed || buttons != 0 || click != 0
         val epoch = mouseEpoch
-        if (click == 0 && buttons == 0) {
+        if (click == 0 && buttons == 0 && (dx != 0 || dy != 0 || wheel != 0)) {
             synchronized(mouseQueueLock) {
                 mouseMotion.add(buttons, dx, dy, wheel)
                 if (mousePumpQueued) return
@@ -442,6 +442,21 @@ internal class HidKeyboard(
         LEFT_SHIFT_NEIGHBOR("Z", 0x1d),
         RIGHT_SHIFT_NEIGHBOR("/", 0x38),
     }
+
+    fun switchApplication(previous: Boolean, done: (Boolean) -> Unit): Boolean =
+        enqueue({ hid, device, _ ->
+            val press = HidReportProtocol.appSwitchReport(previous)
+            var pressed = false
+            var released = false
+            try {
+                pressed = hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, press)
+                if (pressed) Thread.sleep(24)
+            } finally {
+                // Always release Command and Shift, including cancellation or a failed send.
+                released = hid.sendReport(device, HidReportProtocol.KEYBOARD_ID, ByteArray(8))
+            }
+            if (pressed && released) InputDelivery.CONFIRMED else InputDelivery.FAILED
+        }, { done(it == InputDelivery.CONFIRMED) })
 
     fun sendSetupKey(key: MacSetupKey, done: (Boolean) -> Unit): Boolean = sendKey(key.usage, done)
 

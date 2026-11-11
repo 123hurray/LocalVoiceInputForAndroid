@@ -128,6 +128,14 @@ class HidInputActivity : Activity() {
                 if (visible && !settingsOpen) keyboard?.sendMouse(buttons, dx, dy, wheel, click)
             },
             release = { keyboard?.resetMouse() },
+            switchApp = { previous ->
+                val session = keyboard
+                if (visible && !settingsOpen && session?.ready == true) {
+                    transmit(false, { callback -> session.switchApplication(previous, callback) }) { ok ->
+                        if (!ok) android.widget.Toast.makeText(this, "切换按键未发送，请检查连接", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
         )
         panel = VoiceInputPanel(inputHost)
         home = panel.createView()
